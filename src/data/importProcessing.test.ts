@@ -15,6 +15,11 @@ describe('import validation', () => {
     expect(() => validateImportFile(script)).toThrow('Only PDF')
   })
 
+  it('rejects empty documents', () => {
+    const empty = new File([], 'empty.pdf', { type: 'application/pdf' })
+    expect(() => validateImportFile(empty)).toThrow('empty')
+  })
+
   it('extracts calendar dates and timetable weekdays into review candidates', () => {
     const calendar = buildImportReview('academic_calendar', 'October 02 2026\nHoliday\n2026-11-15 Midterm')
     expect(calendar.items.some((item) => item.kind === 'event')).toBe(true)

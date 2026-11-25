@@ -9,6 +9,7 @@ export async function saveClassSession(
 ): Promise<ClassSession> {
   requireDate(input.date, 'Session date')
   if (!input.subjectId) throw new Error('Session subject is required')
+  if (!(await db.subjects.get(input.subjectId))) throw new Error('The selected subject does not exist')
   const now = nowIso()
   const record: ClassSession = { ...input, id: id ?? createId(), createdAt: now, updatedAt: now }
   if (id) {
@@ -16,6 +17,15 @@ export async function saveClassSession(
     if (!previous) throw new Error('Class session no longer exists')
     await db.classSessions.put({ ...previous, ...input, updatedAt: now })
   } else {
+    const duplicate = await db.classSessions
+      .where('date')
+      .equals(input.date)
+      .filter((session) =>
+        session.timetableRuleId === input.timetableRuleId &&
+        session.subjectId === input.subjectId,
+      )
+      .first()
+    if (duplicate) throw new Error('This class session is already recorded for that date')
     await db.classSessions.add(record)
   }
   return (await db.classSessions.get(record.id)) ?? record

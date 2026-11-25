@@ -40,4 +40,7 @@ export class StudentMateDatabase extends Dexie {
   }
 }
 
-export const db = new StudentMateDatabase()
+const isDemoMode = typeof window !== 'undefined' &&
+  new URLSearchParams(window.location.search).get('demo') === '1'
+
+export const db = new StudentMateDatabase(isDemoMode ? 'StudentMate-Demo' : 'StudentMate')

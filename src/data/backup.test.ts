@@ -65,4 +65,29 @@ describe('backup and restore', () => {
     expect(() => validateBackupText('{bad')).toThrow('malformed JSON')
     expect(() => validateBackupText(JSON.stringify({ format: 'other' }))).toThrow('Unrecognized')
   })
+
+  it('rejects rows with missing required fields', async () => {
+    const backup = await createFullBackup()
+    backup.data.subjects = [{ id: 'bad-subject', name: 'Missing required fields' }]
+    await expect(previewRestore(backup)).rejects.toThrow('missing "semesterId"')
+  })
+
+  it('rejects malicious subject CSS colors in restored backups', async () => {
+    const backup = await createFullBackup()
+    backup.data.subjects = [{
+      id: 'bad-color',
+      semesterId: 'semester-1',
+      name: 'Synthetic',
+      code: 'TEST',
+      facultyName: '',
+      credits: 3,
+      kind: 'theory',
+      attendanceTarget: 75,
+      color: 'url(https://example.invalid/tracker)',
+      archived: false,
+      createdAt: '',
+      updatedAt: '',
+    }]
+    await expect(previewRestore(backup)).rejects.toThrow('six-digit hex color')
+  })
 })

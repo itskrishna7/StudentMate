@@ -25,6 +25,28 @@ const makeRecord = (sessionId: string, status: AttendanceRecord['status']): Atte
 })
 
 describe('attendance calculations', () => {
+  it('handles a large attendance history without changing exact values', () => {
+    const sessions = Array.from({ length: 5000 }, (_, index) => makeSession(`large-${index}`))
+    const records = Array.from({ length: 5000 }, (_, index) =>
+      makeRecord(`large-${index}`, index % 4 === 0 ? 'absent' : 'present'))
+    const summary = calculateAttendanceSummary(sessions, records, 75)
+    expect(summary.conducted).toBe(5000)
+    expect(summary.attended).toBe(3750)
+    expect(summary.absent).toBe(1250)
+    expect(summary.displayPercentage).toBe(75)
+  })
+  it('handles zero conducted classes, 100 percent, and 0 percent', () => {
+    const noClasses = calculateAttendanceSummary([], [], 75)
+    expect(noClasses.conducted).toBe(0)
+    expect(noClasses.displayPercentage).toBe(0)
+
+    const fullSessions = Array.from({ length: 100 }, (_, index) => makeSession(String(index)))
+    const fullRecords = fullSessions.map((session) => makeRecord(session.id, 'present'))
+    expect(calculateAttendanceSummary(fullSessions, fullRecords, 75).displayPercentage).toBe(100)
+
+    const absentRecords = fullSessions.map((session) => makeRecord(session.id, 'absent'))
+    expect(calculateAttendanceSummary(fullSessions, absentRecords, 75).displayPercentage).toBe(0)
+  })
   it('rounds display percentages below and at .5 correctly', () => {
     expect(roundAttendance(1, 8)).toBe(13)
     expect(roundAttendance(1, 12)).toBe(8)

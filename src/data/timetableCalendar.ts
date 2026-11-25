@@ -79,6 +79,15 @@ export async function saveCalendarEvent(input: CalendarInput, id?: string): Prom
     if (!previous) throw new Error('Calendar event no longer exists')
     await db.calendarEvents.put({ ...previous, ...input, updatedAt: now })
   } else {
+    const duplicate = await db.calendarEvents
+      .filter((event) =>
+        event.title.trim().toLowerCase() === input.title.trim().toLowerCase() &&
+        event.startDate === input.startDate &&
+        event.endDate === input.endDate &&
+        event.subjectId === input.subjectId,
+      )
+      .first()
+    if (duplicate) throw new Error('This calendar event is already recorded')
     await db.calendarEvents.add(record)
   }
   return (await db.calendarEvents.get(record.id)) ?? record

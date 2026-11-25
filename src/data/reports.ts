@@ -2,8 +2,21 @@ import { calculateAssessmentPercentage } from './grades'
 import { calculateAttendanceSummary } from './attendance'
 import type { Assessment, AttendanceRecord, ClassSession, Mark, Semester, Subject } from './models'
 
+export function neutralizeCsvFormula(value: string | number): string {
+  const cleaned = Array.from(String(value))
+    .filter((character) => {
+      const code = character.charCodeAt(0)
+      return code === 9 || code === 10 || code === 13 || code >= 32
+    })
+    .join('')
+    .replace(/[\r\n]+/g, ' ')
+    .replace(/^\s+/, '')
+  return /^[=+\-@]/.test(cleaned) ? `'${cleaned}` : cleaned
+}
+
 function csvEscape(value: string | number): string {
-  const text = String(value)
+  let text = neutralizeCsvFormula(value)
+  if (/^[=+@\-\t\r]/.test(text)) text = `'${text}`
   return /[",\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text
 }
 

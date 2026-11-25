@@ -2,8 +2,15 @@ import { describe, expect, it } from 'vitest'
 import { calculateAssessmentPercentage } from './grades'
 import { calculateAttendanceSummary } from './attendance'
 import type { Assessment, AttendanceRecord, ClassSession, Mark } from './models'
+import { neutralizeCsvFormula } from './reports'
 
 describe('analytics report inputs', () => {
+  it('neutralizes spreadsheet formula prefixes in CSV values', () => {
+    expect(neutralizeCsvFormula('=SUM(A1:A2)')).toBe("'=SUM(A1:A2)")
+    expect(neutralizeCsvFormula('+cmd')).toBe("'+cmd")
+    expect(neutralizeCsvFormula('Data\r=WEBSERVICE("example")')).toBe('Data =WEBSERVICE("example")')
+    expect(neutralizeCsvFormula('Data Structures')).toBe('Data Structures')
+  })
   it('uses exact attendance values for report summaries', () => {
     const sessions: ClassSession[] = [
       { id: '1', date: '2026-10-01', timetableRuleId: 'r', subjectId: 's', status: 'conducted', notes: '', createdAt: '', updatedAt: '' },

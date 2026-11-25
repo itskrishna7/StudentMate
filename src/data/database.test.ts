@@ -4,6 +4,7 @@ import { requireDate, requireNonEmpty, requireRange } from './validation'
 import { archiveSubject, deleteSubject, saveSemester, saveSubject } from './academicRepositories'
 import { db } from './database'
 import { findCalendarConflicts, findTimetableOverlap, saveCalendarEvent, saveTimetableRule } from './timetableCalendar'
+import { saveClassSession } from './attendanceRepository'
 
 const databases: StudentMateDatabase[] = []
 
@@ -130,6 +131,43 @@ describe('semester and subject repositories', () => {
 
       const conflicts = await findCalendarConflicts('2026-10-02')
       expect(conflicts.map((event) => event.title)).toContain('College Holiday')
+    })
+
+    it('prevents duplicate class sessions and duplicate calendar events', async () => {
+      await db.subjects.add({
+        id: 'subject-session',
+        semesterId: 'semester-1',
+        name: 'Test Subject',
+        code: 'TEST',
+        facultyName: '',
+        credits: 3,
+        kind: 'theory',
+        attendanceTarget: 75,
+        color: '#4f46e5',
+        archived: false,
+        createdAt: '',
+        updatedAt: '',
+      })
+      const input = {
+        date: '2026-10-05',
+        timetableRuleId: 'rule-1',
+        subjectId: 'subject-session',
+        status: 'conducted' as const,
+        notes: '',
+      }
+      await saveClassSession(input)
+      await expect(saveClassSession(input)).rejects.toThrow('already recorded')
+
+      const event = {
+        title: 'Exam',
+        type: 'exam' as const,
+        startDate: '2026-11-10',
+        endDate: '2026-11-10',
+        recurring: false,
+        notes: '',
+      }
+      await saveCalendarEvent(event)
+      await expect(saveCalendarEvent(event)).rejects.toThrow('already recorded')
     })
 
     it('rejects invalid timetable time ranges', async () => {

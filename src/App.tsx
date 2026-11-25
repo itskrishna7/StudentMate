@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useState } from 'react'
 import { Archive, Moon, Sun, GraduationCap, LayoutDashboard, Settings, Wifi, WifiOff, BookOpen, Plus, Pencil, Trash2, CalendarDays, Clock3, ClipboardCheck, Calculator, FileUp, BarChart3, DatabaseBackup } from 'lucide-react'
 import { Link, Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import { initializeDatabaseSettings } from './data/settings'
@@ -12,9 +12,11 @@ import { calculateAttendanceSummary } from './data/attendance'
 import { calculateAssessmentPercentage, calculateCGPA, calculateSGPA, gradePointForPercentage, requiredMarks } from './data/grades'
 import { listAssessments, listMarks, saveAssessment, saveMark, saveGradingScale, listGradingScales } from './data/academicsRepository'
 import { buildImportReview, extractImageText, extractPdfText, saveImportJob, validateImportFile, type ExtractedReviewItem, type ImportReview } from './data/importProcessing'
-import { Bar, BarChart, CartesianGrid, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
-import { exportAttendanceCsv, exportSemesterCsv } from './data/reports'
 import { createFullBackup, downloadJsonBackup, previewRestore, restoreBackup, validateBackupText, type RestorePreview, type StudentMateBackup } from './data/backup'
+import { loadDashboardData, type DashboardData } from './data/dashboard'
+import { enterDemoMode, isDemoMode, resetDemoData, seedDemoData } from './data/demo'
+
+const AnalyticsPage = lazy(() => import('./features/AnalyticsPage'))
 
 type Theme = 'light' | 'dark'
 
@@ -150,6 +152,11 @@ function AppShell() {
             Offline - local academic data and cached pages remain available.
           </div>
         )}
+        {isDemoMode() && (
+          <div className="demo-banner" role="status">
+            Sample data mode - entirely fictional records are isolated from your real database.
+          </div>
+        )}
 
         <Routes>
           <Route path="/" element={<Dashboard />} />
@@ -159,7 +166,7 @@ function AppShell() {
           <Route path="/attendance" element={<AttendancePage />} />
           <Route path="/academics" element={<AcademicsPage />} />
           <Route path="/import" element={<ImportPage />} />
-          <Route path="/analytics" element={<AnalyticsPage />} />
+          <Route path="/analytics" element={<Suspense fallback={<div className="page"><div className="loading-card" role="status">Loading analytics...</div></div>}><AnalyticsPage /></Suspense>} />
           <Route path="/backup" element={<BackupPage />} />
           <Route path="/settings" element={<SettingsPage theme={theme} toggleTheme={toggleTheme} installPrompt={installPrompt} onInstall={async () => {
             if (!installPrompt) return
@@ -175,20 +182,105 @@ function AppShell() {
 }
 
 function Dashboard() {
+  const [data, setData] = useState<DashboardData | null>(null)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    let active = true
+    const refresh = () => {
+      loadDashboardData().then((value) => {
+        if (active) setData(value)
+      }).catch((cause) => {
+        if (active) setError(cause instanceof Error ? cause.message : 'Could not load dashboard')
+      })
+    }
+    refresh()
+    window.addEventListener('focus', refresh)
+    return () => {
+      active = false
+      window.removeEventListener('focus', refresh)
+    }
+  }, [])
+
+  if (!data) {
+    return <div className="page"><div className="loading-card" role="status">Loading academic overview...</div></div>
+  }
+
   return (
     <div className="page">
       <div className="page-heading">
-        <div>
-          <p className="eyebrow">Academic workspace</p>
-          <h1>Dashboard</h1>
-        </div>
+        <div><p className="eyebrow">Academic workspace</p><h1>Dashboard</h1></div>
+        {data.currentSemester && <span className="semester-chip">{data.currentSemester.name}</span>}
       </div>
+      {error && <div className="error-banner" role="alert">{error}</div>}
 
-      <section className="empty-dashboard" aria-label="Academic overview">
-        <div className="empty-icon"><GraduationCap size={30} /></div>
-        <h2>No academic data yet</h2>
-        <p>Semester, subject, timetable, and attendance data will appear here once they are configured.</p>
-      </section>
+      {data.activeSubjectCount === 0 ? (
+        <section className="empty-dashboard" aria-label="Academic overview">
+          <div className="empty-icon"><GraduationCap size={30} /></div>
+          <h2>No academic data yet</h2>
+          <p>Add a semester and subject to begin building your academic overview.</p>
+        </section>
+      ) : (
+        <>
+          <div className="dashboard-grid">
+            <article className="metric-card"><span>Overall attendance</span><strong>{data.overallAttendance}%</strong><p>{data.subjectAttendance.reduce((sum, item) => sum + item.attended, 0)} attended classes</p></article>
+            <article className="metric-card"><span>Active subjects</span><strong>{data.activeSubjectCount}</strong><p>{data.belowTargetSubjects.length} below target</p></article>
+            <article className="metric-card"><span>Current SGPA</span><strong>{data.currentSGPA === null ? '—' : data.currentSGPA.toFixed(2)}</strong><p>{data.currentSGPA === null ? 'Add entered marks' : 'Calculated from entered marks'}</p></article>
+            <article className="metric-card"><span>Overall CGPA</span><strong>{data.overallCGPA === null ? '—' : data.overallCGPA.toFixed(2)}</strong><p>{data.overallCGPA === null ? 'Unavailable' : 'Weighted by credits'}</p></article>
+          </div>
+
+          <div className="dashboard-columns">
+            <section className="dashboard-panel">
+              <div className="section-heading"><div><h2>Attendance</h2><p>Subject-wise target overview</p></div></div>
+              <div className="dashboard-list">
+                {data.subjectAttendance.map((item) => (
+                  <article className="dashboard-attendance" key={item.subjectId}>
+                    <div className="summary-heading"><h3>{item.name}</h3><strong>{item.percentage}%</strong></div>
+                    <div className="summary-bar"><span style={{ width: `${item.percentage}%`, background: item.color }} /></div>
+                    <p>{item.attended}/{item.conducted} conducted · Target {item.target}%{item.classesRequired > 0 ? ` · ${item.classesRequired} required` : ` · ${item.maxBunk} bunk available`}</p>
+                  </article>
+                ))}
+              </div>
+            </section>
+
+            <section className="dashboard-panel">
+              <div className="section-heading"><div><h2>Today's lectures</h2><p>{data.todayLectures.length} scheduled</p></div></div>
+              {data.todayLectures.length === 0 ? <p className="muted-state">No lectures scheduled today.</p> : data.todayLectures.map((lecture) => (
+                <article className="dashboard-list-row" key={lecture.id}><strong>{lecture.startTime}</strong><div><h3>{lecture.subjectName}</h3><p>{lecture.room || 'Room not set'} · {lecture.endTime}</p></div></article>
+              ))}
+            </section>
+          </div>
+
+          <div className="dashboard-columns">
+            <section className="dashboard-panel">
+              <div className="section-heading"><div><h2>Upcoming</h2><p>Next lectures and examinations</p></div></div>
+              {data.upcomingLectures.slice(0, 5).map((lecture) => (
+                <article className="dashboard-list-row" key={lecture.id}><strong>{lecture.date.slice(5)}</strong><div><h3>{lecture.subjectName}</h3><p>{lecture.startTime}–{lecture.endTime} · {lecture.room || 'Room not set'}</p></div></article>
+              ))}
+              {data.upcomingExaminations.map((exam) => (
+                <article className="dashboard-list-row exam" key={exam.id}><strong>{exam.date.slice(5)}</strong><div><h3>{exam.title}</h3><p>{exam.type.replace('_', ' ')}</p></div></article>
+              ))}
+              {data.upcomingLectures.length === 0 && data.upcomingExaminations.length === 0 && <p className="muted-state">Nothing upcoming.</p>}
+            </section>
+
+            <section className="dashboard-panel">
+              <div className="section-heading"><div><h2>Recent attendance</h2><p>Latest marked activity</p></div></div>
+              {data.recentActivity.length === 0 ? <p className="muted-state">No attendance has been marked.</p> : data.recentActivity.map((activity) => (
+                <article className="activity-row" key={activity.id}><span className={`activity-status ${activity.status}`}>{activity.status}</span><div><h3>{activity.subjectName}</h3><p>{activity.date}</p></div></article>
+              ))}
+            </section>
+          </div>
+
+          {data.marksSummary.length > 0 && (
+            <section className="dashboard-panel marks-panel">
+              <div className="section-heading"><div><h2>Internal marks</h2><p>Entered assessment summary</p></div></div>
+              <div className="marks-grid">{data.marksSummary.map((item) => (
+                <article key={item.subjectId}><h3>{item.subjectName}</h3><strong>{item.enteredAssessments ? `${item.percentage.toFixed(1)}%` : '—'}</strong><p>{item.enteredAssessments}/{item.totalAssessments} assessments entered</p></article>
+              ))}</div>
+            </section>
+          )}
+        </>
+      )}
     </div>
   )
 }
@@ -207,7 +299,20 @@ function SubjectsPage() {
     setSubjects(subjectRows)
   }
 
-  useEffect(() => { refresh().catch((cause) => setError(cause instanceof Error ? cause.message : 'Could not load academic records')) }, [includeArchived])
+  useEffect(() => {
+    let active = true
+    void Promise.all([listSemesters(), listSubjects(includeArchived)])
+      .then(([semesterRows, subjectRows]) => {
+        if (active) {
+          setSemesters(semesterRows)
+          setSubjects(subjectRows)
+        }
+      })
+      .catch((cause) => {
+        if (active) setError(cause instanceof Error ? cause.message : 'Could not load academic records')
+      })
+    return () => { active = false }
+  }, [includeArchived])
 
   const saveAndRefresh = async (operation: () => Promise<unknown>) => {
     setError('')
@@ -512,7 +617,23 @@ function AttendancePage() {
     setRecords(recordRows)
   }
 
-  useEffect(() => { refresh().catch((cause) => setError(cause instanceof Error ? cause.message : 'Could not load attendance')) }, [date])
+  useEffect(() => {
+    let active = true
+    void Promise.all([listSubjects(false), listAllTimetableRules(), listSessions(date), listSessions(), listAttendanceRecords()])
+      .then(([subjectRows, ruleRows, sessionRows, allSessionRows, recordRows]) => {
+        if (active) {
+          setSubjects(subjectRows)
+          setRules(ruleRows)
+          setSessions(sessionRows)
+          setAllSessions(allSessionRows)
+          setRecords(recordRows)
+        }
+      })
+      .catch((cause) => {
+        if (active) setError(cause instanceof Error ? cause.message : 'Could not load attendance')
+      })
+    return () => { active = false }
+  }, [date])
 
   const ensureSessions = async () => {
     setError('')
@@ -667,7 +788,20 @@ function TimetablePage() {
     setSubjects(subjectRows)
     setRules(ruleRows)
   }
-  useEffect(() => { refresh().catch((cause) => setError(cause instanceof Error ? cause.message : 'Could not load timetable')) }, [])
+  useEffect(() => {
+    let active = true
+    void Promise.all([listSubjects(false), listAllTimetableRules()])
+      .then(([subjectRows, ruleRows]) => {
+        if (active) {
+          setSubjects(subjectRows)
+          setRules(ruleRows)
+        }
+      })
+      .catch((cause) => {
+        if (active) setError(cause instanceof Error ? cause.message : 'Could not load timetable')
+      })
+    return () => { active = false }
+  }, [])
 
   const saveAndRefresh = async (operation: () => Promise<unknown>) => {
     setError('')
@@ -751,7 +885,20 @@ function CalendarPage() {
     setEvents(eventRows)
     setSubjects(subjectRows)
   }
-  useEffect(() => { refresh().catch((cause) => setError(cause instanceof Error ? cause.message : 'Could not load calendar')) }, [])
+  useEffect(() => {
+    let active = true
+    void Promise.all([listCalendarEvents(), listSubjects(true)])
+      .then(([eventRows, subjectRows]) => {
+        if (active) {
+          setEvents(eventRows)
+          setSubjects(subjectRows)
+        }
+      })
+      .catch((cause) => {
+        if (active) setError(cause instanceof Error ? cause.message : 'Could not load calendar')
+      })
+    return () => { active = false }
+  }, [])
   const saveAndRefresh = async (operation: () => Promise<unknown>) => {
     setError('')
     try { await operation(); await refresh(); setEditor(null) }
@@ -799,127 +946,6 @@ function CalendarEditor({ subjects, record, onCancel, onSave }: { subjects: Subj
       <label className="checkbox-label"><input type="checkbox" checked={recurring} onChange={(event) => setRecurring(event.target.checked)} /> Recurring event</label>
       <div className="form-actions"><button className="secondary-button" type="button" onClick={onCancel}>Cancel</button><button className="primary-button" type="submit">Save event</button></div>
     </form>
-  )
-}
-
-function AnalyticsPage() {
-  const [subjects, setSubjects] = useState<Subject[]>([])
-  const [sessions, setSessions] = useState<ClassSession[]>([])
-  const [records, setRecords] = useState<AttendanceRecord[]>([])
-  const [assessments, setAssessments] = useState<Assessment[]>([])
-  const [marks, setMarks] = useState<Mark[]>([])
-  const [semesters, setSemesters] = useState<Semester[]>([])
-  const [error, setError] = useState('')
-
-  useEffect(() => {
-    Promise.all([
-      listSubjects(true),
-      listSessions(),
-      listAttendanceRecords(),
-      listAssessments(),
-      listMarks(),
-      listSemesters(),
-    ]).then(([subjectRows, sessionRows, recordRows, assessmentRows, markRows, semesterRows]) => {
-      setSubjects(subjectRows)
-      setSessions(sessionRows)
-      setRecords(recordRows)
-      setAssessments(assessmentRows)
-      setMarks(markRows)
-      setSemesters(semesterRows)
-    }).catch((cause) => setError(cause instanceof Error ? cause.message : 'Could not load analytics'))
-  }, [])
-
-  const attendanceData = subjects.map((subject) => {
-    const summary = calculateAttendanceSummary(
-      sessions.filter((session) => session.subjectId === subject.id),
-      records.filter((record) => record.subjectId === subject.id),
-      subject.attendanceTarget,
-    )
-    return { name: subject.code || subject.name, attendance: summary.displayPercentage, target: subject.attendanceTarget, color: subject.color }
-  })
-
-  const academicData = subjects.map((subject) => ({
-    name: subject.code || subject.name,
-    percentage: calculateAssessmentPercentage(
-      assessments.filter((assessment) => assessment.subjectId === subject.id),
-      marks.filter((mark) => mark.subjectId === subject.id),
-    ),
-    color: subject.color,
-  }))
-
-  return (
-    <div className="page">
-      <div className="page-heading">
-        <div><p className="eyebrow">Academic insights</p><h1>Analytics</h1></div>
-        <div className="heading-actions">
-          <button className="secondary-button" type="button" onClick={() => exportAttendanceCsv(subjects, sessions, records)}>Attendance CSV</button>
-          <button className="primary-button" type="button" onClick={() => exportSemesterCsv(semesters, subjects, assessments, marks)}>Semester report</button>
-        </div>
-      </div>
-      {error && <div className="error-banner" role="alert">{error}</div>}
-
-      {subjects.length === 0 ? (
-        <section className="empty-dashboard"><div className="empty-icon"><Calculator size={30} /></div><h2>No academic data yet</h2><p>Add subjects and attendance or assessment records to populate analytics.</p></section>
-      ) : (
-        <>
-          <div className="analytics-grid">
-            <section className="chart-card">
-              <div className="section-heading"><div><h2>Attendance by subject</h2><p>Exact records summarized for display</p></div></div>
-              <div className="chart-box">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={attendanceData}>
-                    <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                    <XAxis dataKey="name" />
-                    <YAxis domain={[0, 100]} />
-                    <Tooltip />
-                    <Bar dataKey="attendance" radius={[6, 6, 0, 0]}>
-                      {attendanceData.map((entry, index) => <Cell key={`${entry.name}-${index}`} fill={entry.color} />)}
-                    </Bar>
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            </section>
-
-            <section className="chart-card">
-              <div className="section-heading"><div><h2>Assessment performance</h2><p>Entered weighted marks</p></div></div>
-              <div className="chart-box">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={academicData}>
-                    <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                    <XAxis dataKey="name" />
-                    <YAxis domain={[0, 100]} />
-                    <Tooltip />
-                    <Bar dataKey="percentage" radius={[6, 6, 0, 0]}>
-                      {academicData.map((entry, index) => <Cell key={`${entry.name}-${index}`} fill={entry.color} />)}
-                    </Bar>
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            </section>
-          </div>
-
-          <section className="insight-list">
-            {attendanceData.map((item) => {
-              const subject = subjects.find((row) => (row.code || row.name) === item.name)
-              const summary = calculateAttendanceSummary(
-                sessions.filter((session) => session.subjectId === subject?.id),
-                records.filter((record) => record.subjectId === subject?.id),
-                subject?.attendanceTarget ?? 75,
-              )
-              return (
-                <article className="insight-card" key={item.name}>
-                  <div><h3>{subject?.name ?? item.name}</h3><p>{summary.attended} attended, {summary.missed} missed, {summary.conducted} conducted</p></div>
-                  <strong>{item.attendance}%</strong>
-                  <p>{summary.classesRequired > 0
-                    ? `${summary.classesRequired} class(es) required to reach ${subject?.attendanceTarget ?? 75}%`
-                    : `${summary.maxBunk} class(es) can currently be missed`}</p>
-                </article>
-              )
-            })}
-          </section>
-        </>
-      )}
-    </div>
   )
 }
 
@@ -1151,6 +1177,13 @@ function SettingsPage({ theme, toggleTheme, installPrompt, onInstall }: { theme:
     checkDatabaseHealth().then(setHealth)
   }, [])
 
+  useEffect(() => {
+    if (isDemoMode() && sessionStorage.getItem('studentmate-demo-needs-seed') === '1') {
+      sessionStorage.removeItem('studentmate-demo-needs-seed')
+      void seedDemoData().then(() => window.location.reload())
+    }
+  }, [])
+
   return (
     <div className="page">
       <div className="page-heading">
@@ -1190,6 +1223,25 @@ function SettingsPage({ theme, toggleTheme, installPrompt, onInstall }: { theme:
           </button>
         </section>
       )}
+      <section className="settings-card database-status">
+        <div>
+          <h2>Demo mode</h2>
+          <p>{isDemoMode() ? 'Sample data uses a separate isolated browser database.' : 'Explore entirely fictional records without mixing them into your academic data.'}</p>
+        </div>
+        {isDemoMode() ? (
+          <div className="heading-actions">
+            <button className="theme-button" type="button" onClick={() => void seedDemoData().then(() => window.location.reload())}>Reload sample data</button>
+            <button className="theme-button" type="button" onClick={() => void resetDemoData().then(() => window.location.reload())}>Reset demo</button>
+            <button className="theme-button" type="button" onClick={() => {
+              const url = new URL(window.location.href)
+              url.searchParams.delete('demo')
+              window.location.assign(url.toString())
+            }}>Exit demo</button>
+          </div>
+        ) : (
+          <button className="theme-button" type="button" onClick={() => void enterDemoMode()}>Enter demo mode</button>
+        )}
+      </section>
     </div>
   )
 }
