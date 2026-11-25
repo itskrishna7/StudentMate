@@ -19,8 +19,8 @@ describe('App', () => {
       </MemoryRouter>,
     )
 
-    expect(await screen.findByRole('heading', { name: 'Dashboard' })).toBeInTheDocument()
-    expect(await screen.findByText('No academic data yet')).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: /Good (morning|afternoon|evening)!/ })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: 'Build your academic workspace' })).toBeInTheDocument()
   })
 
   it('shows an offline status banner after going offline', () => {

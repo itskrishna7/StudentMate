@@ -2,8 +2,8 @@ import { expect, test } from '@playwright/test'
 
 test('dashboard loads and navigation reaches settings', async ({ page }) => {
   await page.goto('/')
-  await expect(page.getByRole('heading', { name: 'Dashboard' })).toBeVisible()
-  await expect(page.getByText('No academic data yet')).toBeVisible()
+  await expect(page.getByRole('heading', { name: /Good (morning|afternoon|evening)!/ })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Build your academic workspace' })).toBeVisible()
   await page.goto('/settings')
   await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible()
 })
@@ -39,7 +39,7 @@ test('cached app reloads while offline', async ({ page, context }) => {
   await page.waitForTimeout(500)
   await context.setOffline(true)
   await page.reload()
-  await expect(page.getByRole('heading', { name: 'Dashboard' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: /Good (morning|afternoon|evening)!/ })).toBeVisible()
   await expect(page.getByText(/Offline - local academic data/)).toBeVisible()
 })
 

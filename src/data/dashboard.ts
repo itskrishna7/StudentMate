@@ -24,6 +24,25 @@ export interface DashboardLecture {
   endTime: string
   room: string
   date: string
+  color: string
+  status: 'completed' | 'current' | 'upcoming' | 'cancelled' | 'teacher_absent' | 'holiday' | 'extra'
+}
+
+export interface DashboardCalendarEvent {
+  id: string
+  title: string
+  date: string
+  type: 'holiday' | 'exam' | 'internal_exam' | 'vacation' | 'event' | 'deadline' | 'special'
+  subjectName?: string
+}
+
+export interface DashboardSemesterProgress {
+  name: string
+  startDate: string
+  endDate: string
+  daysCompleted: number
+  daysRemaining: number
+  percentage: number
 }
 
 export interface DashboardExamination {
@@ -31,6 +50,7 @@ export interface DashboardExamination {
   title: string
   date: string
   type: string
+  subjectName?: string
 }
 
 export interface DashboardActivity {
@@ -61,6 +81,8 @@ export interface DashboardData {
   marksSummary: DashboardMarksSummary[]
   currentSGPA: number | null
   overallCGPA: number | null
+  upcomingCalendarEvents: DashboardCalendarEvent[]
+  semesterProgress: DashboardSemesterProgress | null
 }
 
 function dateKey(date: Date): string {
@@ -121,20 +143,29 @@ export async function loadDashboardData(now: Date = new Date()): Promise<Dashboa
   const lectureRows = (rules: typeof timetableRules, dateString: string, weekday: number) => rules
     .filter((rule) => rule.active && rule.weekday === weekday)
     .filter((rule) => rule.startDate <= dateString && (!rule.endDate || rule.endDate >= dateString))
-    .filter((rule) => !events.some((event) =>
-      event.type === 'holiday' &&
-      dateString >= event.startDate &&
-      dateString <= event.endDate &&
-      (!event.subjectId || event.subjectId === rule.subjectId),
-    ))
-    .filter((rule) => !sessions.some((session) =>
-      session.timetableRuleId === rule.id &&
-      session.date === dateString &&
-      ['teacher_absent', 'cancelled', 'holiday'].includes(session.status),
-    ))
     .sort((a, b) => a.startTime.localeCompare(b.startTime))
     .map((rule): DashboardLecture => {
       const subject = subjects.find((item) => item.id === rule.subjectId)
+      const session = sessions.find((item) => item.timetableRuleId === rule.id && item.date === dateString)
+      const isHoliday = events.some((event) =>
+        event.type === 'holiday' &&
+        dateString >= event.startDate &&
+        dateString <= event.endDate &&
+        (!event.subjectId || event.subjectId === rule.subjectId),
+      )
+      const currentTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
+      let status: DashboardLecture['status'] = 'upcoming'
+      if (session?.status === 'teacher_absent') {
+        status = 'teacher_absent'
+      } else if (session?.status === 'holiday' || isHoliday) {
+        status = 'holiday'
+      } else if (session?.status === 'cancelled') {
+        status = 'cancelled'
+      } else if (dateString === today && rule.endTime <= currentTime) {
+        status = 'completed'
+      } else if (dateString === today && rule.startTime <= currentTime && rule.endTime >= currentTime) {
+        status = 'current'
+      }
       return {
         id: rule.id,
         subjectId: rule.subjectId,
@@ -143,10 +174,32 @@ export async function loadDashboardData(now: Date = new Date()): Promise<Dashboa
         endTime: rule.endTime,
         room: rule.room,
         date: dateString,
+        color: subject?.color ?? '#4f46e5',
+        status,
       }
     })
 
   const todayLectures = lectureRows(timetableRules, today, todayWeekday)
+  for (const session of sessions.filter((item) =>
+    item.date === today &&
+    item.status === 'conducted' &&
+    (item.timetableRuleId === 'extra' || item.rescheduledFromId),
+  )) {
+    const subject = subjects.find((item) => item.id === session.subjectId)
+    if (!todayLectures.some((lecture) => lecture.id === session.id)) {
+      todayLectures.push({
+        id: session.id,
+        subjectId: session.subjectId,
+        subjectName: subject?.name ?? 'Unknown subject',
+        startTime: 'Extra',
+        endTime: '',
+        room: 'Extra / rescheduled',
+        date: today,
+        color: subject?.color ?? '#4f46e5',
+        status: 'extra',
+      })
+    }
+  }
 
   const upcomingLectures: DashboardLecture[] = []
   for (let offset = 1; offset <= 14 && upcomingLectures.length < 8; offset += 1) {
@@ -162,12 +215,39 @@ export async function loadDashboardData(now: Date = new Date()): Promise<Dashboa
     .filter((event) => (event.type === 'exam' || event.type === 'internal_exam') && event.endDate >= today)
     .sort((a, b) => a.startDate.localeCompare(b.startDate))
     .slice(0, 6)
-    .map((event) => ({
-      id: event.id,
-      title: event.title,
-      date: event.startDate,
-      type: event.type,
-    }))
+    .map((event) => {
+      const subjectName = event.subjectId
+        ? subjects.find((subject) => subject.id === event.subjectId)?.name
+        : undefined
+      return {
+        id: event.id,
+        title: event.title,
+        date: event.startDate,
+        type: event.type,
+        ...(subjectName ? { subjectName } : {}),
+      }
+    })
+
+  const upcomingCalendarEvents: DashboardCalendarEvent[] = events
+    .filter((event) =>
+      event.endDate >= today &&
+      event.type !== 'exam' &&
+      event.type !== 'internal_exam',
+    )
+    .sort((a, b) => a.startDate.localeCompare(b.startDate))
+    .slice(0, 6)
+    .map((event) => {
+      const subjectName = event.subjectId
+        ? subjects.find((subject) => subject.id === event.subjectId)?.name
+        : undefined
+      return {
+        id: event.id,
+        title: event.title,
+        date: event.startDate,
+        type: event.type,
+        ...(subjectName ? { subjectName } : {}),
+      }
+    })
 
   const recordsBySession = new Map(records.map((record) => [record.sessionId, record]))
   const recentActivity = [...sessions]
@@ -239,6 +319,26 @@ export async function loadDashboardData(now: Date = new Date()): Promise<Dashboa
     if (semesterRows.length) overallCGPA = calculateCGPA(semesterRows, defaultScale?.decimalPrecision ?? 2)
   }
 
+  let semesterProgress: DashboardSemesterProgress | null = null
+  if (currentSemester) {
+    const start = Date.parse(`${currentSemester.startDate}T00:00:00`)
+    const end = Date.parse(`${currentSemester.endDate}T00:00:00`)
+    if (Number.isFinite(start) && Number.isFinite(end) && end >= start) {
+      const todayStart = Date.parse(`${today}T00:00:00`)
+      const totalDays = Math.max(1, Math.round((end - start) / 86400000) + 1)
+      const daysCompleted = Math.min(totalDays, Math.max(0, Math.round((todayStart - start) / 86400000) + 1))
+      const daysRemaining = Math.max(0, totalDays - daysCompleted)
+      semesterProgress = {
+        name: currentSemester.name,
+        startDate: currentSemester.startDate,
+        endDate: currentSemester.endDate,
+        daysCompleted,
+        daysRemaining,
+        percentage: Math.round((daysCompleted / totalDays) * 100),
+      }
+    }
+  }
+
   return {
     currentSemester: currentSemester
       ? { id: currentSemester.id, name: currentSemester.name, startDate: currentSemester.startDate, endDate: currentSemester.endDate }
@@ -254,5 +354,7 @@ export async function loadDashboardData(now: Date = new Date()): Promise<Dashboa
     marksSummary,
     currentSGPA,
     overallCGPA,
+    upcomingCalendarEvents,
+    semesterProgress,
   }
 }

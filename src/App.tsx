@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useState } from 'react'
-import { Archive, Moon, Sun, GraduationCap, LayoutDashboard, Settings, Wifi, WifiOff, BookOpen, Plus, Pencil, Trash2, CalendarDays, Clock3, ClipboardCheck, Calculator, FileUp, BarChart3, DatabaseBackup } from 'lucide-react'
+import { Archive, Moon, Sun, GraduationCap, LayoutDashboard, Settings, Wifi, WifiOff, BookOpen, Plus, Pencil, Trash2, CalendarDays, Clock3, ClipboardCheck, Calculator, FileUp, BarChart3, DatabaseBackup, AlertTriangle, ArrowRight, CheckCircle2, MapPin, Timer, TrendingUp } from 'lucide-react'
 import { Link, Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import { initializeDatabaseSettings } from './data/settings'
 import { checkDatabaseHealth } from './data/health'
@@ -17,6 +17,7 @@ import { loadDashboardData, type DashboardData } from './data/dashboard'
 import { enterDemoMode, isDemoMode, resetDemoData, seedDemoData } from './data/demo'
 
 const AnalyticsPage = lazy(() => import('./features/AnalyticsPage'))
+const DashboardCharts = lazy(() => import('./features/DashboardCharts'))
 
 type Theme = 'light' | 'dark'
 
@@ -184,6 +185,7 @@ function AppShell() {
 function Dashboard() {
   const [data, setData] = useState<DashboardData | null>(null)
   const [error, setError] = useState('')
+  const [now, setNow] = useState(() => new Date())
 
   useEffect(() => {
     let active = true
@@ -196,89 +198,256 @@ function Dashboard() {
     }
     refresh()
     window.addEventListener('focus', refresh)
+    const timer = window.setInterval(() => setNow(new Date()), 60000)
     return () => {
       active = false
       window.removeEventListener('focus', refresh)
+      window.clearInterval(timer)
     }
   }, [])
 
   if (!data) {
-    return <div className="page"><div className="loading-card" role="status">Loading academic overview...</div></div>
+    return (
+      <div className="page premium-dashboard">
+        <div className="premium-skeleton-header" />
+        <div className="premium-skeleton-grid">{[0,1,2,3].map((item) => <div className="premium-skeleton-card" key={item} />)}</div>
+        <div className="premium-skeleton-columns"><div /><div /></div>
+      </div>
+    )
+  }
+
+  const hour = now.getHours()
+  const greeting = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening'
+  const dateLabel = now.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })
+  const todayText = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+  const nextLecture = data.todayLectures.find((lecture) =>
+    lecture.status === 'current' || lecture.status === 'upcoming',
+  ) ?? data.upcomingLectures.find((lecture) => lecture.date >= todayText)
+
+  const countdown = (() => {
+    if (!nextLecture || nextLecture.status === 'extra' || nextLecture.startTime === 'Extra') return null
+    const [hours, minutes] = nextLecture.startTime.split(':').map(Number)
+    const lectureDate = new Date(`${nextLecture.date}T00:00:00`)
+    lectureDate.setHours(hours ?? 0, minutes ?? 0, 0, 0)
+    const remaining = lectureDate.getTime() - now.getTime()
+    if (remaining < 0) return null
+    const totalMinutes = Math.ceil(remaining / 60000)
+    const hoursRemaining = Math.floor(totalMinutes / 60)
+    const minutesRemaining = totalMinutes % 60
+    return hoursRemaining > 0 ? `${hoursRemaining}h ${minutesRemaining}m` : `${minutesRemaining}m`
+  })()
+
+  const daysUntil = (date: string) => {
+    const target = new Date(`${date}T00:00:00`)
+    const today = new Date(`${todayText}T00:00:00`)
+    return Math.max(0, Math.ceil((target.getTime() - today.getTime()) / 86400000))
+  }
+
+  const retry = () => {
+    setError('')
+    loadDashboardData().then(setData).catch((cause) =>
+      setError(cause instanceof Error ? cause.message : 'Could not load dashboard'),
+    )
   }
 
   return (
-    <div className="page">
-      <div className="page-heading">
-        <div><p className="eyebrow">Academic workspace</p><h1>Dashboard</h1></div>
-        {data.currentSemester && <span className="semester-chip">{data.currentSemester.name}</span>}
-      </div>
+    <div className="page premium-dashboard">
+      <header className="premium-welcome">
+        <div>
+          <p className="premium-eyebrow">{dateLabel}</p>
+          <h1>{greeting}! <span>Here is your academic overview.</span></h1>
+          {data.currentSemester && <p className="premium-semester"><span className="premium-live-dot" />{data.currentSemester.name}</p>}
+        </div>
+        <div className="premium-quick-actions" aria-label="Quick actions">
+          <Link className="premium-action premium-action-primary" to="/attendance"><ClipboardCheck size={17} />Mark attendance</Link>
+          <Link className="premium-action" to="/timetable"><Plus size={17} />Add lecture</Link>
+          <Link className="premium-action" to="/subjects"><BookOpen size={17} />Add subject</Link>
+          <Link className="premium-action" to="/calendar"><CalendarDays size={17} />Add event</Link>
+        </div>
+      </header>
       {error && <div className="error-banner" role="alert">{error}</div>}
+      {error && <button className="premium-retry" type="button" onClick={retry}>Retry dashboard</button>}
 
       {data.activeSubjectCount === 0 ? (
-        <section className="empty-dashboard" aria-label="Academic overview">
-          <div className="empty-icon"><GraduationCap size={30} /></div>
-          <h2>No academic data yet</h2>
-          <p>Add a semester and subject to begin building your academic overview.</p>
+        <section className="premium-empty-dashboard" aria-label="Academic overview">
+          <div className="premium-empty-icon"><GraduationCap size={28} /></div>
+          <div><p>READY WHEN YOU ARE</p><h2>Build your academic workspace</h2><span>Add a semester and subject to unlock attendance, timetable and performance insights.</span></div>
+          <Link className="premium-action premium-action-primary" to="/subjects">Add first subject <ArrowRight size={16} /></Link>
         </section>
       ) : (
         <>
-          <div className="dashboard-grid">
-            <article className="metric-card"><span>Overall attendance</span><strong>{data.overallAttendance}%</strong><p>{data.subjectAttendance.reduce((sum, item) => sum + item.attended, 0)} attended classes</p></article>
-            <article className="metric-card"><span>Active subjects</span><strong>{data.activeSubjectCount}</strong><p>{data.belowTargetSubjects.length} below target</p></article>
-            <article className="metric-card"><span>Current SGPA</span><strong>{data.currentSGPA === null ? '—' : data.currentSGPA.toFixed(2)}</strong><p>{data.currentSGPA === null ? 'Add entered marks' : 'Calculated from entered marks'}</p></article>
-            <article className="metric-card"><span>Overall CGPA</span><strong>{data.overallCGPA === null ? '—' : data.overallCGPA.toFixed(2)}</strong><p>{data.overallCGPA === null ? 'Unavailable' : 'Weighted by credits'}</p></article>
+          <div className="premium-summary-grid">
+            <article className="premium-summary-card">
+              <div className="premium-card-top"><span>Overall attendance</span><div className="premium-card-icon indigo"><TrendingUp size={18} /></div></div>
+              <div className="premium-summary-value"><strong>{data.overallAttendance}%</strong><span className={data.overallAttendance >= 75 ? 'positive' : 'warning'}>{data.overallAttendance >= 75 ? 'On track' : 'Needs attention'}</span></div>
+              <div className="premium-progress"><span style={{ width: `${data.overallAttendance}%` }} /></div>
+              <p>{data.subjectAttendance.reduce((sum, item) => sum + item.attended, 0)} attended · {data.subjectAttendance.reduce((sum, item) => sum + item.conducted, 0)} conducted</p>
+            </article>
+            <article className="premium-summary-card">
+              <div className="premium-card-top"><span>Active subjects</span><div className="premium-card-icon blue"><BookOpen size={18} /></div></div>
+              <div className="premium-summary-value"><strong>{data.activeSubjectCount}</strong><span>{data.belowTargetSubjects.length} below target</span></div>
+              <p>{data.currentSemester ? 'Current semester subjects' : 'Subjects available'}</p>
+            </article>
+            <article className="premium-summary-card">
+              <div className="premium-card-top"><span>CGPA</span><div className="premium-card-icon violet"><GraduationCap size={18} /></div></div>
+              <div className="premium-summary-value"><strong>{data.overallCGPA === null ? '—' : data.overallCGPA.toFixed(2)}</strong><span>{data.currentSGPA === null ? 'No SGPA yet' : `SGPA ${data.currentSGPA.toFixed(2)}`}</span></div>
+              <p>{data.overallCGPA === null ? 'Available after enough marks are entered' : 'Calculated from available results'}</p>
+            </article>
+            <article className="premium-summary-card">
+              <div className="premium-card-top"><span>Next examination</span><div className="premium-card-icon amber"><CalendarDays size={18} /></div></div>
+              {data.upcomingExaminations[0] ? (
+                <>
+                  <div className="premium-exam-next"><strong>{data.upcomingExaminations[0].title}</strong><span>{daysUntil(data.upcomingExaminations[0].date)} days</span></div>
+                  <p>{new Date(`${data.upcomingExaminations[0].date}T00:00:00`).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}</p>
+                </>
+              ) : <><strong className="premium-no-data">No exams scheduled</strong><p>Upcoming examinations will appear here.</p></>}
+            </article>
           </div>
 
-          <div className="dashboard-columns">
-            <section className="dashboard-panel">
-              <div className="section-heading"><div><h2>Attendance</h2><p>Subject-wise target overview</p></div></div>
-              <div className="dashboard-list">
-                {data.subjectAttendance.map((item) => (
-                  <article className="dashboard-attendance" key={item.subjectId}>
-                    <div className="summary-heading"><h3>{item.name}</h3><strong>{item.percentage}%</strong></div>
-                    <div className="summary-bar"><span style={{ width: `${item.percentage}%`, background: item.color }} /></div>
-                    <p>{item.attended}/{item.conducted} conducted · Target {item.target}%{item.classesRequired > 0 ? ` · ${item.classesRequired} required` : ` · ${item.maxBunk} bunk available`}</p>
-                  </article>
-                ))}
-              </div>
-            </section>
+          <div className="premium-main-grid">
+            <div className="premium-main-column">
+              <section className="premium-panel">
+                <div className="premium-panel-heading">
+                  <div><p>DAY PLAN</p><h2>Today's timetable</h2></div>
+                  <Link className="premium-panel-link" to="/timetable">View timetable <ArrowRight size={14} /></Link>
+                </div>
+                {data.todayLectures.length === 0 ? (
+                  <div className="premium-empty-inline"><Clock3 size={18} /><span>No lectures scheduled today.</span></div>
+                ) : (
+                  <div className="premium-timeline">
+                    {data.todayLectures.map((lecture) => (
+                      <article className={`premium-timeline-item ${lecture.status}`} key={lecture.id}>
+                        <div className="premium-timeline-time">
+                          <strong>{lecture.startTime === 'Extra' ? 'Extra' : lecture.startTime}</strong>
+                          {lecture.endTime && <span>{lecture.endTime}</span>}
+                        </div>
+                        <div className="premium-timeline-marker" style={{ '--subject-color': lecture.color } as React.CSSProperties}>
+                          {lecture.status === 'completed' ? <CheckCircle2 size={15} /> : lecture.status === 'cancelled' ? <AlertTriangle size={15} /> : <span />}
+                        </div>
+                        <div className="premium-timeline-content">
+                          <div><h3>{lecture.subjectName}</h3><span className={`premium-status ${lecture.status}`}>{lecture.status}</span></div>
+                          <p><MapPin size={13} />{lecture.room || 'Location not set'}{lecture.status === 'current' ? ' · Happening now' : ''}</p>
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                )}
+              </section>
 
-            <section className="dashboard-panel">
-              <div className="section-heading"><div><h2>Today's lectures</h2><p>{data.todayLectures.length} scheduled</p></div></div>
-              {data.todayLectures.length === 0 ? <p className="muted-state">No lectures scheduled today.</p> : data.todayLectures.map((lecture) => (
-                <article className="dashboard-list-row" key={lecture.id}><strong>{lecture.startTime}</strong><div><h3>{lecture.subjectName}</h3><p>{lecture.room || 'Room not set'} · {lecture.endTime}</p></div></article>
-              ))}
-            </section>
+              <section className="premium-next-card">
+                <div className="premium-next-icon"><Timer size={20} /></div>
+                {nextLecture ? (
+                  <div className="premium-next-content">
+                    <p>Next lecture</p>
+                    <h2>{nextLecture.subjectName}</h2>
+                    <span>{nextLecture.startTime}{nextLecture.endTime ? `–${nextLecture.endTime}` : ''} · {nextLecture.room || 'Location not set'}</span>
+                  </div>
+                ) : (
+                  <div className="premium-next-content"><p>Next lecture</p><h2>No upcoming lecture</h2><span>Check your timetable for later sessions.</span></div>
+                )}
+                {countdown && <strong className="premium-countdown">{countdown}</strong>}
+              </section>
+
+              <section className="premium-panel">
+                <div className="premium-panel-heading">
+                  <div><p>ATTENDANCE</p><h2>Subjects needing attention</h2></div>
+                  <Link className="premium-panel-link" to="/attendance">Mark attendance <ArrowRight size={14} /></Link>
+                </div>
+                {data.belowTargetSubjects.length === 0 ? (
+                  <div className="premium-empty-inline"><CheckCircle2 size={18} /><span>No subjects are below their attendance target.</span></div>
+                ) : (
+                  <div className="premium-warning-list">
+                    {data.belowTargetSubjects.map((item) => (
+                      <article className="premium-warning-row" key={item.subjectId}>
+                        <div className="premium-warning-dot" style={{ background: item.color }} />
+                        <div><h3>{item.name}</h3><p>{item.percentage}% attendance · Target {item.target}%</p></div>
+                        <strong>{item.classesRequired > 0 ? `${item.classesRequired} required` : 'At target'}</strong>
+                      </article>
+                    ))}
+                  </div>
+                )}
+              </section>
+            </div>
+
+            <aside className="premium-side-column">
+              <section className="premium-panel">
+                <div className="premium-panel-heading">
+                  <div><p>EXAMINATIONS</p><h2>Upcoming</h2></div>
+                  <Link className="premium-panel-link" to="/calendar">Calendar <ArrowRight size={14} /></Link>
+                </div>
+                {data.upcomingExaminations.length === 0 ? (
+                  <div className="premium-empty-inline"><CalendarDays size={18} /><span>No upcoming examinations.</span></div>
+                ) : (
+                  <div className="premium-exam-list">
+                    {data.upcomingExaminations.slice(0, 4).map((exam) => (
+                      <article className="premium-exam-row" key={exam.id}>
+                        <div className="premium-exam-date"><strong>{new Date(`${exam.date}T00:00:00`).getDate()}</strong><span>{new Date(`${exam.date}T00:00:00`).toLocaleDateString(undefined, { month: 'short' })}</span></div>
+                        <div><h3>{exam.subjectName ? `${exam.subjectName} — ${exam.title}` : exam.title}</h3><p>{exam.type.replace('_', ' ')} · {daysUntil(exam.date)} days</p></div>
+                      </article>
+                    ))}
+                  </div>
+                )}
+              </section>
+
+              <section className="premium-panel">
+                <div className="premium-panel-heading">
+                  <div><p>CALENDAR</p><h2>Coming up</h2></div>
+                  <Link className="premium-panel-link" to="/calendar">View all <ArrowRight size={14} /></Link>
+                </div>
+                {data.upcomingCalendarEvents.length === 0 ? (
+                  <div className="premium-empty-inline"><CalendarDays size={18} /><span>No upcoming calendar events.</span></div>
+                ) : (
+                  <div className="premium-calendar-list">
+                    {data.upcomingCalendarEvents.slice(0, 5).map((event) => (
+                      <article key={event.id}>
+                        <span className={`premium-event-dot ${event.type}`} />
+                        <div><h3>{event.subjectName ? `${event.subjectName} — ${event.title}` : event.title}</h3><p>{new Date(`${event.date}T00:00:00`).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} · {event.type.replace('_', ' ')}</p></div>
+                      </article>
+                    ))}
+                  </div>
+                )}
+              </section>
+
+              <section className="premium-panel">
+                <div className="premium-panel-heading"><div><p>ACTIVITY</p><h2>Recent</h2></div></div>
+                {data.recentActivity.length === 0 ? (
+                  <div className="premium-empty-inline"><Clock3 size={18} /><span>No attendance activity yet.</span></div>
+                ) : (
+                  <div className="premium-activity-list">
+                    {data.recentActivity.slice(0, 5).map((activity) => (
+                      <article key={activity.id}>
+                        <span className={`premium-activity-icon ${activity.status}`}><ClipboardCheck size={14} /></span>
+                        <div><h3>{activity.subjectName}</h3><p>{activity.status} · {activity.date}</p></div>
+                      </article>
+                    ))}
+                  </div>
+                )}
+              </section>
+            </aside>
           </div>
 
-          <div className="dashboard-columns">
-            <section className="dashboard-panel">
-              <div className="section-heading"><div><h2>Upcoming</h2><p>Next lectures and examinations</p></div></div>
-              {data.upcomingLectures.slice(0, 5).map((lecture) => (
-                <article className="dashboard-list-row" key={lecture.id}><strong>{lecture.date.slice(5)}</strong><div><h3>{lecture.subjectName}</h3><p>{lecture.startTime}–{lecture.endTime} · {lecture.room || 'Room not set'}</p></div></article>
-              ))}
-              {data.upcomingExaminations.map((exam) => (
-                <article className="dashboard-list-row exam" key={exam.id}><strong>{exam.date.slice(5)}</strong><div><h3>{exam.title}</h3><p>{exam.type.replace('_', ' ')}</p></div></article>
-              ))}
-              {data.upcomingLectures.length === 0 && data.upcomingExaminations.length === 0 && <p className="muted-state">Nothing upcoming.</p>}
-            </section>
-
-            <section className="dashboard-panel">
-              <div className="section-heading"><div><h2>Recent attendance</h2><p>Latest marked activity</p></div></div>
-              {data.recentActivity.length === 0 ? <p className="muted-state">No attendance has been marked.</p> : data.recentActivity.map((activity) => (
-                <article className="activity-row" key={activity.id}><span className={`activity-status ${activity.status}`}>{activity.status}</span><div><h3>{activity.subjectName}</h3><p>{activity.date}</p></div></article>
-              ))}
+          <div className="premium-bottom-grid">
+            <Suspense fallback={<section className="premium-panel premium-skeleton-chart"><div /></section>}>
+              <DashboardCharts attendance={data.subjectAttendance} marks={data.marksSummary} />
+            </Suspense>
+            <section className="premium-panel premium-progress-card">
+              <div className="premium-panel-heading"><div><p>SEMESTER</p><h2>Semester progress</h2></div></div>
+              {data.semesterProgress ? (
+                <>
+                  <div className="premium-progress-ring" style={{ '--progress': `${data.semesterProgress.percentage * 3.6}deg` } as React.CSSProperties}>
+                    <div><strong>{data.semesterProgress.percentage}%</strong><span>complete</span></div>
+                  </div>
+                  <div className="premium-progress-details">
+                    <div><span>Started</span><strong>{new Date(`${data.semesterProgress.startDate}T00:00:00`).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</strong></div>
+                    <div><span>Ends</span><strong>{new Date(`${data.semesterProgress.endDate}T00:00:00`).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</strong></div>
+                    <div><span>Remaining</span><strong>{data.semesterProgress.daysRemaining} days</strong></div>
+                  </div>
+                </>
+              ) : (
+                <div className="premium-empty-inline"><CalendarDays size={18} /><span>Semester dates are not available.</span></div>
+              )}
             </section>
           </div>
-
-          {data.marksSummary.length > 0 && (
-            <section className="dashboard-panel marks-panel">
-              <div className="section-heading"><div><h2>Internal marks</h2><p>Entered assessment summary</p></div></div>
-              <div className="marks-grid">{data.marksSummary.map((item) => (
-                <article key={item.subjectId}><h3>{item.subjectName}</h3><strong>{item.enteredAssessments ? `${item.percentage.toFixed(1)}%` : '—'}</strong><p>{item.enteredAssessments}/{item.totalAssessments} assessments entered</p></article>
-              ))}</div>
-            </section>
-          )}
         </>
       )}
     </div>

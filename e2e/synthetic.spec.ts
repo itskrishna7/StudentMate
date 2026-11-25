@@ -234,7 +234,7 @@ async function seedSyntheticDatabase(page: Page) {
   }, syntheticDate)
 
   await page.reload()
-  await expect(page.getByRole('heading', { name: 'Dashboard' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: /Good (morning|afternoon|evening)!/ })).toBeVisible()
 }
 
 test.describe('Synthetic real-world semester', () => {
@@ -390,7 +390,7 @@ test.describe('Synthetic real-world semester', () => {
       ).catch(async () => { await page.reload() })
       await context.setOffline(true)
       await page.reload()
-      await expect(page.getByRole('heading', { name: 'Dashboard' })).toBeVisible()
+      await expect(page.getByRole('heading', { name: /Good (morning|afternoon|evening)!/ })).toBeVisible()
       await expect(page.getByText('Synthetic Semester V')).toBeVisible()
     } finally {
       await context.close()
