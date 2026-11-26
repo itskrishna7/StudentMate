@@ -11,7 +11,7 @@ import { listAttendanceRecords, listSessions, markAttendance, saveClassSession, 
 import { calculateAttendanceSummary } from './data/attendance'
 import { calculateAssessmentPercentage, calculateCGPA, calculateSGPA, gradePointForPercentage, requiredMarks } from './data/grades'
 import { listAssessments, listMarks, saveAssessment, saveMark, saveGradingScale, listGradingScales } from './data/academicsRepository'
-import { buildImportReview, extractImageText, extractPdfText, saveImportJob, validateImportFile, type ExtractedReviewItem, type ImportReview } from './data/importProcessing'
+import { buildImportReview, extractDocument, findSubjectMatch, reviewStateForItem, saveImportJob, validateImportFile, type DocumentExtraction, type DocumentType, type ExtractedReviewItem, type ExtractionProgress, type ImportReview, type ReviewState } from './data/importProcessing'
 import { createFullBackup, downloadJsonBackup, previewRestore, restoreBackup, validateBackupText, type RestorePreview, type StudentMateBackup } from './data/backup'
 import { loadDashboardData, type DashboardData } from './data/dashboard'
 import { enterDemoMode, isDemoMode, resetDemoData, seedDemoData } from './data/demo'
@@ -1223,24 +1223,54 @@ function BackupPage() {
 }
 
 function ImportPage() {
-  const [kind, setKind] = useState<ImportReview['kind']>('academic_calendar')
+  const [documentType, setDocumentType] = useState<DocumentType | 'auto'>('auto')
   const [file, setFile] = useState<File | null>(null)
   const [sourceType, setSourceType] = useState<'pdf' | 'image'>('pdf')
+  const [extraction, setExtraction] = useState<DocumentExtraction | null>(null)
   const [review, setReview] = useState<ImportReview | null>(null)
+  const [subjects, setSubjects] = useState<Subject[]>([])
+  const [semesters, setSemesters] = useState<Semester[]>([])
+  const [existingEvents, setExistingEvents] = useState<CalendarEvent[]>([])
+  const [existingRules, setExistingRules] = useState<TimetableRule[]>([])
   const [processing, setProcessing] = useState(false)
+  const [progress, setProgress] = useState<ExtractionProgress | null>(null)
   const [error, setError] = useState('')
   const [confirmed, setConfirmed] = useState('')
+
+  useEffect(() => {
+    let active = true
+    void Promise.all([listSubjects(false), listSemesters(), listCalendarEvents(), listAllTimetableRules()])
+      .then(([subjectRows, semesterRows, eventRows, ruleRows]) => {
+        if (!active) return
+        setSubjects(subjectRows)
+        setSemesters(semesterRows)
+        setExistingEvents(eventRows)
+        setExistingRules(ruleRows)
+      })
+      .catch((cause) => {
+        if (active) setError(cause instanceof Error ? cause.message : 'Could not load academic records')
+      })
+    return () => { active = false }
+  }, [])
+
+  const analyze = (nextExtraction: DocumentExtraction, type: DocumentType | 'auto' = documentType) => {
+    setReview(buildImportReview(type, nextExtraction, subjects))
+  }
 
   const processFile = async () => {
     if (!file) return
     setError('')
     setConfirmed('')
+    setReview(null)
+    setExtraction(null)
+    setProgress(null)
     setProcessing(true)
     try {
       const type = validateImportFile(file)
       setSourceType(type)
-      const text = type === 'pdf' ? await extractPdfText(file) : await extractImageText(file)
-      setReview(buildImportReview(kind, text))
+      const result = await extractDocument(file, setProgress)
+      setExtraction(result)
+      analyze(result)
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Could not process the document')
     } finally {
@@ -1251,101 +1281,279 @@ function ImportPage() {
   const updateItem = (index: number, patch: Partial<ExtractedReviewItem>) => {
     setReview((current) => current ? {
       ...current,
-      items: current.items.map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item),
+      items: current.items.map((item, itemIndex) => {
+        if (itemIndex !== index) return item
+        const updated = { ...item, ...patch, validation: 'needs_review' as const }
+        const warnings = item.warnings.filter((warning) => !warning.startsWith('Edited by student'))
+        updated.warnings = [...warnings, 'Edited by student; confirm the values before importing']
+        if (patch.title !== undefined && item.kind === 'subject') {
+          const match = findSubjectMatch(patch.title, subjects)
+          updated.subjectMatch = match.state
+          updated.subjectId = match.subjectId
+          updated.createSubject = false
+        }
+        return updated
+      }),
     } : current)
   }
 
+  const addReviewItem = () => {
+    setReview((current) => {
+      if (!current) return current
+      const isCalendar = current.documentType !== 'weekly_timetable'
+      const item: ExtractedReviewItem = {
+        id: crypto.randomUUID(),
+        kind: isCalendar ? 'event' : 'subject',
+        title: '',
+        description: '',
+        ...(isCalendar ? { eventType: current.documentType === 'holiday_list' ? 'holiday' : current.documentType === 'examination_timetable' ? 'exam' : 'event', startDate: '', endDate: '', date: '' } : { subjectMatch: 'unrecognized', lectureKind: 'lecture' }),
+        page: current.pageCount || 1,
+        confidence: 1,
+        validation: 'needs_review',
+        warnings: ['Manually added; complete all required values'],
+        included: true,
+      }
+      return { ...current, items: [...current.items, item] }
+    })
+  }
+
+  const isValidIsoDate = (value: string | undefined) =>
+    Boolean(value && /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(`${value}T00:00:00Z`)))
+  const validItems = review?.items.filter((item) => {
+    if (item.included === false || ['invalid', 'duplicate', 'unrecognized'].includes(item.validation) ||
+      reviewStateForItem(item, review.items) === 'duplicate') return false
+    if (!item.title.trim()) return false
+    if (item.kind === 'event') {
+      return Boolean(item.eventType && isValidIsoDate(item.startDate) && isValidIsoDate(item.endDate) && item.endDate! >= item.startDate!)
+    }
+    return item.lectureKind !== 'break' && item.weekday !== undefined &&
+      Boolean(item.startTime && item.endTime && item.endTime > item.startTime) &&
+      Boolean(item.subjectId || (item.createSubject && item.semesterId))
+  }) ?? []
+
+  const itemWarnings = (item: ExtractedReviewItem): string[] => {
+    const warnings = [...item.warnings]
+    if (item.kind === 'event' && existingEvents.some((event) =>
+      event.title.trim().toLowerCase() === item.title.trim().toLowerCase() &&
+      event.startDate === item.startDate && event.endDate === item.endDate,
+    )) warnings.push('A matching calendar event already exists')
+    if (item.kind === 'subject' && item.weekday !== undefined && item.startTime && item.endTime) {
+      const start = Number(item.startTime.slice(0, 2)) * 60 + Number(item.startTime.slice(3))
+      const end = Number(item.endTime.slice(0, 2)) * 60 + Number(item.endTime.slice(3))
+      if (existingRules.some((rule) => rule.active && rule.weekday === item.weekday &&
+        start < Number(rule.endTime.slice(0, 2)) * 60 + Number(rule.endTime.slice(3)) &&
+        end > Number(rule.startTime.slice(0, 2)) * 60 + Number(rule.startTime.slice(3)))) {
+        warnings.push('This time overlaps an existing timetable session')
+      }
+    }
+    return [...new Set(warnings)]
+  }
+
   const confirmImport = async () => {
-    if (!file || !review) return
+    if (!file || !review || validItems.length === 0) return
+    const duplicateCount = review.items.filter((item) => reviewStateForItem(item, review.items) === 'duplicate').length
+    const warningCount = review.items.filter((item) => itemWarnings(item).length > 0).length
+    if (!window.confirm(`Import ${validItems.length} valid entr${validItems.length === 1 ? 'y' : 'ies'}? ${duplicateCount} duplicate row(s) and ${warningCount} warning(s) will be skipped or need attention. Existing records will not be overwritten.`)) return
     setError('')
     setConfirmed('')
+    let saved = 0
+    const failures: string[] = []
     try {
-      if (review.kind === 'academic_calendar') {
-        for (const item of review.items) {
-          if (!item.date) continue
-          await saveCalendarEvent({
-            title: item.title,
-            type: 'event',
-            startDate: item.date,
-            endDate: item.date,
-            recurring: false,
-            notes: 'Imported from document review',
-          })
-        }
-      } else {
-        for (const item of review.items) {
-          const subjects = await listSubjects(false)
-          const match = subjects.find((subject) => item.title.toLowerCase().includes(subject.name.toLowerCase()) || subject.name.toLowerCase().includes(item.title.toLowerCase()))
-          if (!match) continue
-          await saveTimetableRule({
-            subjectId: match.id,
-            weekday: item.weekday ?? 1,
-            startTime: item.startTime ?? '09:00',
-            endTime: item.endTime ?? '10:00',
-            facultyName: '',
-            room: '',
-            kind: 'lecture',
-            recurring: true,
-            startDate: new Date().toISOString().slice(0, 10),
-            active: true,
-          })
+      for (const item of validItems) {
+        try {
+          const warnings = itemWarnings(item)
+          if (warnings.some((warning) => /already exists|overlaps an existing/.test(warning))) {
+            failures.push(`${item.title}: ${warnings.find((warning) => /already exists|overlaps an existing/.test(warning))}`)
+            continue
+          }
+          if (item.kind === 'event') {
+            await saveCalendarEvent({
+              title: item.title.trim(),
+              type: item.eventType!,
+              startDate: item.startDate!,
+              endDate: item.endDate!,
+              recurring: false,
+              notes: item.description.trim(),
+            })
+          } else {
+            let subjectId = item.subjectId
+            let semesterId: string | undefined
+            if (item.createSubject) {
+              const semester = semesters.find((candidate) => candidate.id === item.semesterId)
+              if (!semester) throw new Error('Choose a semester for this new subject')
+              const created = await saveSubject({
+                semesterId: semester.id,
+                name: item.title.trim(),
+                code: '',
+                facultyName: item.teacher ?? '',
+                credits: 0,
+                kind: item.lectureKind === 'laboratory' ? 'laboratory' : 'theory',
+                attendanceTarget: 75,
+                color: '#4f46e5',
+                archived: false,
+              })
+              subjectId = created.id
+              semesterId = semester.id
+            }
+            if (!subjectId) throw new Error('Choose an existing subject or explicitly create one')
+            const subject = subjects.find((candidate) => candidate.id === subjectId)
+            const semester = semesters.find((candidate) => candidate.id === (semesterId ?? subject?.semesterId))
+            if (!semester) throw new Error('The selected subject has no valid semester')
+            await saveTimetableRule({
+              subjectId,
+              weekday: item.weekday!,
+              startTime: item.startTime!,
+              endTime: item.endTime!,
+              facultyName: item.teacher ?? '',
+              room: item.room ?? '',
+              kind: item.lectureKind === 'laboratory' ? 'laboratory' : 'lecture',
+              recurring: true,
+              startDate: semester.startDate,
+              endDate: semester.endDate,
+              active: true,
+            })
+          }
+          saved += 1
+        } catch (cause) {
+          failures.push(`${item.title}: ${cause instanceof Error ? cause.message : 'could not save'}`)
         }
       }
-      await saveImportJob(kind, file.name, sourceType, review, 'confirmed')
-      setConfirmed('Import confirmed. Reviewed entries are now stored locally.')
+      await saveImportJob(review.kind, file.name, sourceType, review, 'confirmed')
+      await Promise.all([listSubjects(false), listCalendarEvents(), listAllTimetableRules()])
+        .then(([subjectRows, eventRows, ruleRows]) => {
+          setSubjects(subjectRows)
+          setExistingEvents(eventRows)
+          setExistingRules(ruleRows)
+        })
+      setConfirmed(`${saved} entr${saved === 1 ? 'y' : 'ies'} imported. Existing records were kept unchanged.${failures.length ? ` ${failures.length} row(s) were skipped: ${failures.join('; ')}` : ''}`)
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Could not confirm import')
     }
   }
 
+  const documentTypeLabel: Record<DocumentType, string> = {
+    academic_calendar: 'Academic calendar',
+    weekly_timetable: 'Weekly timetable',
+    examination_timetable: 'Examination timetable',
+    holiday_list: 'Holiday list',
+    unknown: 'Unknown document',
+  }
+
   return (
     <div className="page">
       <div className="page-heading">
-        <div><p className="eyebrow">Local document processing</p><h1>Smart import</h1></div>
+        <div><p className="eyebrow">Local document processing</p><h1>Document import</h1></div>
       </div>
       {error && <div className="error-banner" role="alert">{error}</div>}
       {confirmed && <div className="success-banner" role="status">{confirmed}</div>}
       <section className="import-card">
         <div className="import-controls">
           <label>Document type
-            <select value={kind} onChange={(event) => { setKind(event.target.value as ImportReview['kind']); setReview(null) }}>
+            <select value={documentType} onChange={(event) => {
+              const nextType = event.target.value as DocumentType | 'auto'
+              setDocumentType(nextType)
+              if (extraction) analyze(extraction, nextType)
+            }}>
+              <option value="auto">Detect automatically</option>
               <option value="academic_calendar">Academic calendar</option>
-              <option value="timetable">Timetable</option>
+              <option value="weekly_timetable">Weekly timetable</option>
+              <option value="examination_timetable">Examination timetable</option>
+              <option value="holiday_list">Holiday list</option>
             </select>
           </label>
           <label>PDF or image
-            <input type="file" accept=".pdf,.png,.jpg,.jpeg,.webp,application/pdf,image/png,image/jpeg,image/webp" onChange={(event) => { setFile(event.target.files?.[0] ?? null); setReview(null) }} />
+            <input type="file" accept=".pdf,.png,.jpg,.jpeg,.webp,application/pdf,image/png,image/jpeg,image/webp" onChange={(event) => {
+              setFile(event.target.files?.[0] ?? null)
+              setReview(null)
+              setExtraction(null)
+              setProgress(null)
+              setError('')
+              setConfirmed('')
+            }} />
           </label>
           <button className="primary-button" type="button" disabled={!file || processing} onClick={processFile}>{processing ? 'Processing locally...' : 'Extract and review'}</button>
         </div>
-        <p className="privacy-note">Files stay in this browser. OCR and PDF extraction do not upload content to a server.</p>
+        <p className="privacy-note">Documents are processed in this browser. PDF text is preferred; scanned pages use local Tesseract OCR. English OCR resources are cached after first download.</p>
+        {processing && (
+          <div className="import-progress" role="status" aria-live="polite">
+            <div className="import-progress-heading"><span>{progress?.message ?? 'Starting local document extraction...'}</span><strong>{Math.round((progress?.progress ?? 0) * 100)}%</strong></div>
+            <progress max="1" value={progress?.progress ?? 0} />
+          </div>
+        )}
       </section>
 
       {review && (
         <section className="review-card">
-          <div className="section-heading"><div><h2>Review extracted entries</h2><p>Edit uncertain values before confirmation. Nothing was saved yet.</p></div></div>
+          <div className="section-heading import-review-heading">
+            <div><h2>Review extracted information</h2><p>Detected: {documentTypeLabel[review.detectedDocumentType]} · Review as: {documentTypeLabel[review.documentType]} · {review.pageCount} page(s). Nothing has been saved.</p></div>
+            <button className="secondary-button" type="button" onClick={addReviewItem}><Plus size={16} /> Add row</button>
+          </div>
+          {review.detectedDocumentType === 'unknown' && documentType === 'auto' && <div className="error-banner" role="status">Document type is unknown. Select a type above to parse it; no calendar or timetable records have been inferred.</div>}
+          <div className="import-summary">
+            <span><strong>{validItems.length}</strong> valid entries</span>
+            <span><strong>{review.items.filter((item) => ['needs_review', 'invalid', 'unrecognized'].includes(item.validation)).length}</strong> need review</span>
+            <span><strong>{review.items.filter((item) => reviewStateForItem(item, review.items) === 'duplicate').length}</strong> duplicate rows</span>
+            <span><strong>{review.items.filter((item) => itemWarnings(item).some((warning) => /overlaps|already exists/.test(warning))).length}</strong> existing conflicts</span>
+          </div>
           {review.items.length === 0 ? (
-            <p className="muted-state">No reliable entries were detected. You can still confirm no changes or upload a clearer document.</p>
+            <p className="muted-state">No structured entries were found. Choose the correct document type or add rows manually.</p>
           ) : (
-            <div className="review-list">
-              {review.items.map((item, index) => (
-                <article className="review-row" key={`${item.title}-${index}`}>
-                  <span className={item.confidence >= 0.7 ? 'confidence high' : 'confidence'}>{Math.round(item.confidence * 100)}% confidence</span>
-                  <label>Title<input value={item.title} onChange={(event) => updateItem(index, { title: event.target.value })} /></label>
-                  {item.kind === 'event' && <label>Date<input type="date" value={item.date ?? ''} onChange={(event) => updateItem(index, { date: event.target.value })} /></label>}
-                  {item.kind === 'subject' && (
-                    <>
-                      <label>Start<input type="time" value={item.startTime ?? '09:00'} onChange={(event) => updateItem(index, { startTime: event.target.value })} /></label>
-                      <label>End<input type="time" value={item.endTime ?? '10:00'} onChange={(event) => updateItem(index, { endTime: event.target.value })} /></label>
-                      <label>Weekday<select value={item.weekday ?? 1} onChange={(event) => updateItem(index, { weekday: Number(event.target.value) })}>{weekdays.map((day, weekday) => <option key={day} value={weekday}>{day}</option>)}</select></label>
-                    </>
-                  )}
-                  <button className="icon-button" type="button" aria-label="Remove extracted entry" onClick={() => setReview({ ...review, items: review.items.filter((_, itemIndex) => itemIndex !== index) })}><Trash2 size={16} /></button>
-                </article>
-              ))}
+            <div className="import-review-layout">
+              <div className="review-list">
+                {review.items.map((item, index) => {
+                  const warnings = itemWarnings(item)
+                  const state: ReviewState = reviewStateForItem(item, review.items)
+                  return (
+                    <article className={`review-row document-review-row state-${state}`} key={item.id}>
+                      <div className="review-row-meta">
+                        <label className="review-include"><input type="checkbox" checked={item.included !== false} onChange={(event) => updateItem(index, { included: event.target.checked })} /> Include</label>
+                        <span className={`review-state state-${state}`}>{state.replace('_', ' ')}</span>
+                        <span className="confidence">{Math.round(item.confidence * 100)}% OCR/parse confidence · page {item.page}</span>
+                        <button className="icon-button" type="button" aria-label={`Remove ${item.title || 'row'}`} onClick={() => setReview({ ...review, items: review.items.filter((_, itemIndex) => itemIndex !== index) })}><Trash2 size={16} /></button>
+                      </div>
+                      {item.kind === 'event' ? (
+                        <div className="review-fields">
+                          <label>Event name<input value={item.title} onChange={(event) => updateItem(index, { title: event.target.value, description: event.target.value })} /></label>
+                          <label>Event type<select value={item.eventType ?? ''} onChange={(event) => updateItem(index, { eventType: (event.target.value || undefined) as ExtractedReviewItem['eventType'] })}>
+                            <option value="">Choose type</option><option value="holiday">Holiday</option><option value="exam">Examination</option><option value="internal_exam">Internal examination</option><option value="vacation">Vacation</option><option value="deadline">Deadline</option><option value="event">Academic event</option><option value="special">Important date</option>
+                          </select></label>
+                          <label>Start date<input type="date" value={item.startDate ?? item.date ?? ''} onChange={(event) => updateItem(index, { startDate: event.target.value, date: event.target.value })} /></label>
+                          <label>End date<input type="date" value={item.endDate ?? item.startDate ?? item.date ?? ''} onChange={(event) => updateItem(index, { endDate: event.target.value })} /></label>
+                          <label className="review-description">Description<textarea rows={2} value={item.description} onChange={(event) => updateItem(index, { description: event.target.value })} /></label>
+                        </div>
+                      ) : (
+                        <div className="review-fields timetable-review-fields">
+                          <label>Weekday<select value={item.weekday ?? ''} onChange={(event) => updateItem(index, { weekday: event.target.value === '' ? undefined : Number(event.target.value) })}>
+                            <option value="">Choose day</option>{weekdays.map((day, weekday) => <option key={day} value={weekday}>{day}</option>)}
+                          </select></label>
+                          <label>Subject name<input value={item.title} onChange={(event) => updateItem(index, { title: event.target.value })} /></label>
+                          <label>Existing subject<select value={item.createSubject ? '__create__' : item.subjectId ?? ''} onChange={(event) => {
+                            if (event.target.value === '__create__') updateItem(index, { subjectId: undefined, createSubject: true, subjectMatch: 'unrecognized' })
+                            else updateItem(index, { subjectId: event.target.value || undefined, createSubject: false, subjectMatch: event.target.value ? 'matched' : 'unrecognized' })
+                          }}>
+                            <option value="">Choose existing subject</option>{subjects.map((subject) => <option key={subject.id} value={subject.id}>{subject.name}{subject.code ? ` (${subject.code})` : ''}</option>)}<option value="__create__">Create new subject after confirmation</option>
+                          </select></label>
+                          {item.createSubject && <label>New subject semester<select value={item.semesterId ?? ''} onChange={(event) => updateItem(index, { semesterId: event.target.value })}><option value="">Choose semester</option>{semesters.map((semester) => <option key={semester.id} value={semester.id}>{semester.name}</option>)}</select></label>}
+                          <label>Start time<input type="time" value={item.startTime ?? ''} onChange={(event) => updateItem(index, { startTime: event.target.value })} /></label>
+                          <label>End time<input type="time" value={item.endTime ?? ''} onChange={(event) => updateItem(index, { endTime: event.target.value })} /></label>
+                          <label>Classroom<input value={item.room ?? ''} onChange={(event) => updateItem(index, { room: event.target.value })} /></label>
+                          <label>Teacher<input value={item.teacher ?? ''} onChange={(event) => updateItem(index, { teacher: event.target.value })} /></label>
+                          <label>Session type<select value={item.lectureKind ?? 'lecture'} onChange={(event) => updateItem(index, { lectureKind: event.target.value as ExtractedReviewItem['lectureKind'] })}><option value="lecture">Lecture</option><option value="laboratory">Laboratory</option><option value="break">Break (review only)</option></select></label>
+                        </div>
+                      )}
+                      {warnings.length > 0 && <ul className="review-warnings">{warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul>}
+                    </article>
+                  )
+                })}
+              </div>
+              <details className="source-document">
+                <summary>Original extracted text</summary>
+                <pre>{extraction?.pages.map((page) => `Page ${page.page} (${page.source})\n${page.text}`).join('\n\n')}</pre>
+              </details>
             </div>
           )}
-          <div className="form-actions"><button className="secondary-button" type="button" onClick={() => setReview(null)}>Discard</button><button className="primary-button" type="button" onClick={confirmImport}>Confirm import</button></div>
+          {review.items.some((item) => item.lectureKind === 'break') && <p className="privacy-note">Breaks are recognized for review but cannot be imported as timetable rules because timetable records require a subject.</p>}
+          <div className="form-actions"><button className="secondary-button" type="button" onClick={() => { setReview(null); setExtraction(null) }}>Discard</button><button className="primary-button" type="button" disabled={validItems.length === 0} onClick={confirmImport}>Confirm import ({validItems.length})</button></div>
         </section>
       )}
     </div>

@@ -6,13 +6,25 @@ import { join } from 'node:path'
 const syntheticDate = '2026-11-25'
 
 function createSyntheticPdf(title: string, date: string): Buffer {
-  const stream = `BT /F1 18 Tf 72 720 Td (${title}) Tj 0 -30 Td (${date}) Tj ET`
+  return createSyntheticPdfPages([[title, date]])
+}
+
+function createSyntheticPdfPages(pages: string[][]): Buffer {
+  const fontId = 3 + pages.length
+  const contentStartId = fontId + 1
+  const pageObjects = pages.map((_, index) =>
+    `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 ${fontId} 0 R >> >> /Contents ${contentStartId + index} 0 R >>`,
+  )
+  const contentObjects = pages.map((lines) => {
+    const stream = `BT /F1 18 Tf 72 720 Td (${lines[0] ?? ''}) Tj ${lines.slice(1).map((line) => `0 -30 Td (${line}) Tj`).join(' ')} ET`
+    return `<< /Length ${Buffer.byteLength(stream, 'utf8')} >>\nstream\n${stream}\nendstream`
+  })
   const objects = [
     '<< /Type /Catalog /Pages 2 0 R >>',
-    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
-    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>',
+    `<< /Type /Pages /Kids [${pages.map((_, index) => `${index + 3} 0 R`).join(' ')}] /Count ${pages.length} >>`,
+    ...pageObjects,
     '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
-    `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`,
+    ...contentObjects,
   ]
   let pdf = '%PDF-1.4\n'
   const offsets = [0]
@@ -27,6 +39,41 @@ function createSyntheticPdf(title: string, date: string): Buffer {
   }
   pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`
   return Buffer.from(pdf, 'utf8')
+}
+
+function createSyntheticScannedPdf(jpeg: Buffer): Buffer {
+  const image = Buffer.concat([
+    Buffer.from(`<< /Type /XObject /Subtype /Image /Width 1800 /Height 600 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${jpeg.length} >>\nstream\n`),
+    jpeg,
+    Buffer.from('\nendstream'),
+  ])
+  const content = 'q 612 0 0 204 0 294 cm /Im1 Do Q'
+  const objects = [
+    Buffer.from('<< /Type /Catalog /Pages 2 0 R >>'),
+    Buffer.from('<< /Type /Pages /Kids [3 0 R] /Count 1 >>'),
+    Buffer.from('<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /XObject << /Im1 4 0 R >> >> /Contents 5 0 R >>'),
+    image,
+    Buffer.from(`<< /Length ${content.length} >>\nstream\n${content}\nendstream`),
+  ]
+  const parts = [Buffer.from('%PDF-1.4\n')]
+  const offsets = [0]
+  let position = parts[0]!.length
+  for (const [index, object] of objects.entries()) {
+    offsets.push(position)
+    const wrapped = Buffer.concat([
+      Buffer.from(`${index + 1} 0 obj\n`),
+      object,
+      Buffer.from('\nendobj\n'),
+    ])
+    parts.push(wrapped)
+    position += wrapped.length
+  }
+  const xrefOffset = position
+  let trailer = `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`
+  for (const offset of offsets.slice(1)) trailer += `${String(offset).padStart(10, '0')} 00000 n \n`
+  trailer += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`
+  parts.push(Buffer.from(trailer))
+  return Buffer.concat(parts)
 }
 
 async function seedSyntheticDatabase(page: Page) {
@@ -341,33 +388,181 @@ test.describe('Synthetic real-world semester', () => {
       buffer: createSyntheticPdf('Synthetic Internal Examination', '2026-11-30'),
     })
     await page.getByRole('button', { name: 'Extract and review' }).click()
-    await expect(page.getByRole('heading', { name: 'Review extracted entries' })).toBeVisible({ timeout: 30000 })
+    await expect(page.getByRole('heading', { name: 'Review extracted information' })).toBeVisible({ timeout: 30000 })
+    await expect(page.getByLabel('Event name')).toHaveValue('Synthetic Internal Examination')
+    await expect(page.getByLabel('Start date')).toHaveValue('2026-11-30')
+    const importJobCount = await page.evaluate(() => new Promise<number>((resolve, reject) => {
+      const request = indexedDB.open('StudentMate')
+      request.onerror = () => reject(request.error)
+      request.onsuccess = () => {
+        const transaction = request.result.transaction('importJobs', 'readonly')
+        const count = transaction.objectStore('importJobs').count()
+        count.onsuccess = () => resolve(count.result)
+        count.onerror = () => reject(count.error)
+      }
+    }))
+    expect(importJobCount).toBe(0)
   })
 
-  test('scanned image OCR reaches review or reports a safe failure', async ({ page }, testInfo) => {
+  test('text timetable PDF extracts weekday, subject, and time values', async ({ page }) => {
+    test.setTimeout(60000)
+    await page.goto('/import')
+    await page.getByLabel('Document type').selectOption('weekly_timetable')
+    await page.locator('input[type="file"]').setInputFiles({
+      name: 'synthetic-timetable.pdf',
+      mimeType: 'application/pdf',
+      buffer: createSyntheticPdf('Monday 09:00-10:00 Data Structures', 'Tuesday 11:30-12:30 Engineering Mathematics'),
+    })
+    await page.getByRole('button', { name: 'Extract and review' }).click()
+    await expect(page.getByRole('heading', { name: 'Review extracted information' })).toBeVisible({ timeout: 30000 })
+    await expect(page.getByLabel('Weekday').nth(0)).toHaveValue('1')
+    await expect(page.getByLabel('Subject name').nth(0)).toHaveValue('Data Structures')
+    await expect(page.getByLabel('Start time').nth(0)).toHaveValue('09:00')
+    await expect(page.getByLabel('End time').nth(0)).toHaveValue('10:00')
+    await expect(page.getByLabel('Weekday').nth(1)).toHaveValue('2')
+    await expect(page.getByLabel('Subject name').nth(1)).toHaveValue('Engineering Mathematics')
+  })
+
+  test('explicit timetable confirmation imports a match without changing attendance history', async ({ page }) => {
+    await seedSyntheticDatabase(page)
+    await page.goto('/import')
+    await page.getByLabel('Document type').selectOption('weekly_timetable')
+    await page.locator('input[type="file"]').setInputFiles({
+      name: 'synthetic-confirmed-timetable.pdf',
+      mimeType: 'application/pdf',
+      buffer: createSyntheticPdf('Monday 11:00-12:00 Data Structures Room 101 Teacher: Alex', ''),
+    })
+    await page.getByRole('button', { name: 'Extract and review' }).click()
+    await expect(page.getByLabel('Existing subject')).toHaveValue('subject-ds')
+    await expect(page.getByLabel('Classroom')).toHaveValue('Room 101')
+    await expect(page.getByLabel('Teacher')).toHaveValue('Alex')
+
+    const readCounts = () => page.evaluate(() => new Promise<{ timetableRules: number; attendanceRecords: number }>((resolve, reject) => {
+      const request = indexedDB.open('StudentMate')
+      request.onerror = () => reject(request.error)
+      request.onsuccess = () => {
+        const transaction = request.result.transaction(['timetableRules', 'attendanceRecords'], 'readonly')
+        const rules = transaction.objectStore('timetableRules').count()
+        const attendance = transaction.objectStore('attendanceRecords').count()
+        transaction.oncomplete = () => resolve({
+          timetableRules: rules.result,
+          attendanceRecords: attendance.result,
+        })
+        transaction.onerror = () => reject(transaction.error)
+      }
+    }))
+    const before = await readCounts()
+    page.once('dialog', (dialog) => void dialog.accept())
+    await page.getByRole('button', { name: /Confirm import \(1\)/ }).click()
+    await expect(page.getByRole('status')).toContainText('1 entry imported')
+    const after = await readCounts()
+    expect(after.timetableRules).toBe(before.timetableRules + 1)
+    expect(after.attendanceRecords).toBe(before.attendanceRecords)
+  })
+
+  test('multi-page calendar PDF extracts dated events from later pages', async ({ page }) => {
+    await page.goto('/import')
+    await page.getByLabel('Document type').selectOption('academic_calendar')
+    await page.locator('input[type="file"]').setInputFiles({
+      name: 'synthetic-multi-page-calendar.pdf',
+      mimeType: 'application/pdf',
+      buffer: createSyntheticPdfPages([
+        ['Academic Calendar 2026-2027'],
+        ['Synthetic Founders Day Holiday 15 November 2026'],
+      ]),
+    })
+    await page.getByRole('button', { name: 'Extract and review' }).click()
+    await expect(page.getByLabel('Event name')).toHaveValue('Synthetic Founders Day Holiday')
+    await expect(page.getByLabel('Start date')).toHaveValue('2026-11-15')
+    await expect(page.getByText('2 page(s). Nothing has been saved.')).toBeVisible()
+    await expect(page.getByText(/page 2/)).toBeVisible()
+  })
+
+  test('scanned PDF pages render and OCR holiday details', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== 'desktop')
+    await page.goto('/import')
+    await page.getByLabel('Document type').selectOption('holiday_list')
+    const jpeg = await page.evaluate(() => {
+      const canvas = document.createElement('canvas')
+      canvas.width = 1800
+      canvas.height = 600
+      const context = canvas.getContext('2d')!
+      context.fillStyle = '#fff'
+      context.fillRect(0, 0, canvas.width, canvas.height)
+      context.fillStyle = '#111'
+      context.font = 'bold 68px Arial'
+      context.fillText('HOLIDAY LIST', 70, 120)
+      context.font = '56px Arial'
+      context.fillText('Founders Day Holiday', 70, 260)
+      context.fillText('25 November 2026', 70, 390)
+      return canvas.toDataURL('image/jpeg', 0.95).split(',')[1]!
+    })
+    await page.locator('input[type="file"]').setInputFiles({
+      name: 'synthetic-scanned-holiday.pdf',
+      mimeType: 'application/pdf',
+      buffer: createSyntheticScannedPdf(Buffer.from(jpeg, 'base64')),
+    })
+    await page.getByRole('button', { name: 'Extract and review' }).click()
+    await expect(page.getByLabel('Event name')).toHaveValue('Founders Day Holiday', { timeout: 60000 })
+    await expect(page.getByLabel('Start date')).toHaveValue('2026-11-25')
+  })
+
+  test('scanned holiday image extracts its date and event locally', async ({ page }, testInfo) => {
     test.skip(testInfo.project.name !== 'desktop')
     test.setTimeout(90000)
     await page.goto('/import')
-    await page.getByLabel('Document type').selectOption('timetable')
-    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64')
+    await page.getByLabel('Document type').selectOption('holiday_list')
+    const png = await page.evaluate(() => {
+      const canvas = document.createElement('canvas')
+      canvas.width = 1800
+      canvas.height = 600
+      const context = canvas.getContext('2d')!
+      context.fillStyle = '#fff'
+      context.fillRect(0, 0, canvas.width, canvas.height)
+      context.fillStyle = '#111'
+      context.font = 'bold 68px Arial'
+      context.fillText('HOLIDAY LIST', 70, 120)
+      context.font = '56px Arial'
+      context.fillText('Founders Day Holiday', 70, 260)
+      context.fillText('25 November 2026', 70, 390)
+      return canvas.toDataURL('image/png').split(',')[1]!
+    })
+    const imageBuffer = Buffer.from(png, 'base64')
     await page.locator('input[type="file"]').setInputFiles({
-      name: 'synthetic-timetable.png',
+      name: 'synthetic-holiday.png',
       mimeType: 'image/png',
-      buffer: png,
+      buffer: imageBuffer,
     })
     await page.getByRole('button', { name: 'Extract and review' }).click()
-    await expect(
-      page.getByRole('heading', { name: 'Review extracted entries' }).or(page.getByRole('alert')),
-    ).toBeVisible({ timeout: 60000 })
+    await expect(page.getByRole('heading', { name: 'Review extracted information' })).toBeVisible({ timeout: 60000 })
+    await expect(page.getByLabel('Event name')).toHaveValue('Founders Day Holiday', { timeout: 10000 })
+    await expect(page.getByLabel('Start date')).toHaveValue('2026-11-25')
+
+    await page.waitForFunction(() => navigator.serviceWorker?.controller !== null, undefined, { timeout: 15000 })
+      .catch(async () => { await page.reload() })
+    await page.context().setOffline(true)
+    await page.reload()
+    await page.goto('/import')
+    await page.getByLabel('Document type').selectOption('holiday_list')
+    await page.locator('input[type="file"]').setInputFiles({
+      name: 'synthetic-holiday.png',
+      mimeType: 'image/png',
+      buffer: imageBuffer,
+    })
+    await page.getByRole('button', { name: 'Extract and review' }).click()
+    await expect(page.getByLabel('Event name')).toHaveValue('Founders Day Holiday', { timeout: 60000 })
+    await expect(page.getByLabel('Start date')).toHaveValue('2026-11-25')
   })
 
   test('persistent isolated profile survives close reopen and offline reload', async ({ playwright }, testInfo) => {
     test.setTimeout(60000)
     test.skip(testInfo.project.name !== 'desktop')
+    const baseURL = testInfo.project.use.baseURL
+    if (typeof baseURL !== 'string') throw new Error('Playwright baseURL must be configured for this test')
     const profileDir = await mkdtemp(join(tmpdir(), 'studentmate-synthetic-'))
     let context = await playwright.chromium.launchPersistentContext(profileDir, {
       headless: true,
-      baseURL: 'http://127.0.0.1:4173',
+      baseURL,
     })
     try {
       let page = await context.newPage()
@@ -378,7 +573,7 @@ test.describe('Synthetic real-world semester', () => {
 
       context = await playwright.chromium.launchPersistentContext(profileDir, {
         headless: true,
-        baseURL: 'http://127.0.0.1:4173',
+        baseURL,
       })
       page = await context.newPage()
       await page.goto('/')
