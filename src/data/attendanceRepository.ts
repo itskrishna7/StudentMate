@@ -37,6 +37,51 @@ export async function setSessionStatus(id: string, status: SessionStatus): Promi
   })
 }
 
+export async function markDayAsHoliday(date: string): Promise<number> {
+  requireDate(date, 'Holiday date')
+  const weekday = new Date(`${date}T00:00:00`).getDay()
+
+  return db.transaction('rw', db.classSessions, db.timetableRules, db.subjects, async () => {
+    const [daySessions, rules] = await Promise.all([
+      db.classSessions.where('date').equals(date).toArray(),
+      db.timetableRules.toArray(),
+    ])
+    const scheduledRules = rules.filter((rule) =>
+      rule.active &&
+      rule.weekday === weekday &&
+      rule.startDate <= date &&
+      (!rule.endDate || rule.endDate >= date),
+    )
+    const sessionRuleIds = new Set(daySessions.map((session) => session.timetableRuleId))
+    const now = nowIso()
+    let createdCount = 0
+
+    for (const rule of scheduledRules) {
+      if (sessionRuleIds.has(rule.id)) continue
+      if (!(await db.subjects.get(rule.subjectId))) {
+        throw new Error('A scheduled class references a subject that no longer exists')
+      }
+      await db.classSessions.add({
+        id: createId(),
+        date,
+        timetableRuleId: rule.id,
+        subjectId: rule.subjectId,
+        status: 'holiday',
+        notes: '',
+        createdAt: now,
+        updatedAt: now,
+      })
+      createdCount += 1
+    }
+
+    await Promise.all(daySessions
+      .filter((session) => session.status !== 'holiday')
+      .map((session) => db.classSessions.update(session.id, { status: 'holiday', updatedAt: now })))
+
+    return daySessions.length + createdCount
+  })
+}
+
 export async function markAttendance(
   sessionId: string,
   subjectId: string,

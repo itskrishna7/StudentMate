@@ -663,6 +663,12 @@ test.describe('Synthetic real-world semester', () => {
     await page.getByLabel('Date').fill(syntheticDate)
     await expect(page.locator('.session-card').filter({ hasText: 'Applied Physics' }).first()).toBeVisible()
 
+    await page.getByLabel('Date').fill('2026-11-26')
+    page.once('dialog', (dialog) => dialog.accept())
+    await page.getByRole('button', { name: 'Mark whole day holiday' }).click()
+    await expect(page.locator('.success-banner')).toContainText('Marked 1 class as a holiday for 2026-11-26')
+    await expect(page.locator('.session-card').filter({ hasText: 'Database Laboratory' }).first()).toContainText('holiday')
+
     await page.goto('/calendar')
     await expect(page.getByRole('heading', { name: 'Academic calendar' })).toBeVisible()
     await expect(page.getByText('Synthetic Semester Examination')).toBeVisible()

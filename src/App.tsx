@@ -7,7 +7,7 @@ import type { CalendarEvent, Semester, Subject, TimetableRule } from './data/mod
 import { archiveSubject, deleteSubject, listSemesters, listSubjects, saveSemester, saveSubject } from './data/academicRepositories'
 import { cancelTimetableRule, listAllTimetableRules, listCalendarEvents, saveCalendarEvent, saveTimetableRule } from './data/timetableCalendar'
 import type { Assessment, AttendanceStatus, AttendanceRecord, ClassSession, GradingScale, Mark } from './data/models'
-import { listAttendanceRecords, listSessions, markAttendance, saveClassSession, setSessionStatus } from './data/attendanceRepository'
+import { listAttendanceRecords, listSessions, markAttendance, markDayAsHoliday, saveClassSession, setSessionStatus } from './data/attendanceRepository'
 import { calculateAttendanceSummary } from './data/attendance'
 import { calculateAssessmentPercentage, calculateCGPA, calculateSGPA, gradePointForPercentage, requiredMarks } from './data/grades'
 import { listAssessments, listMarks, saveAssessment, saveMark, saveGradingScale, listGradingScales } from './data/academicsRepository'
@@ -795,6 +795,7 @@ function AttendancePage() {
   const [allSessions, setAllSessions] = useState<ClassSession[]>([])
   const [records, setRecords] = useState<AttendanceRecord[]>([])
   const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
   const [extraSubjectId, setExtraSubjectId] = useState('')
 
   const refresh = async () => {
@@ -855,6 +856,7 @@ function AttendancePage() {
 
   const bulkMark = async (status: AttendanceStatus) => {
     setError('')
+    setNotice('')
     try {
       for (const session of sessions) {
         if (session.status === 'conducted') await markAttendance(session.id, session.subjectId, status)
@@ -865,9 +867,25 @@ function AttendancePage() {
     }
   }
 
+  const markSelectedDayAsHoliday = async () => {
+    if (!window.confirm(`Mark ${date} as a holiday? All classes on this date will be excluded from attendance totals. Existing attendance records will be kept.`)) return
+    setError('')
+    setNotice('')
+    try {
+      const count = await markDayAsHoliday(date)
+      await refresh()
+      setNotice(count === 0
+        ? `No classes were found for ${date}.`
+        : `Marked ${count} class${count === 1 ? '' : 'es'} as a holiday for ${date}. Existing attendance records are preserved.`)
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Could not mark the day as a holiday')
+    }
+  }
+
   const addExtraLecture = async () => {
     if (!extraSubjectId) return
     setError('')
+    setNotice('')
     try {
       await saveClassSession({
         date,
@@ -890,14 +908,16 @@ function AttendancePage() {
     <div className="page">
       <div className="page-heading">
         <div><p className="eyebrow">Daily records</p><h1>Attendance</h1></div>
-        <label className="date-picker">Date<input type="date" value={date} onChange={(event) => setDate(event.target.value)} /></label>
+        <label className="date-picker">Date<input type="date" value={date} onChange={(event) => { setDate(event.target.value); setNotice('') }} /></label>
       </div>
       {error && <div className="error-banner" role="alert">{error}</div>}
+      {notice && <div className="success-banner" role="status">{notice}</div>}
 
       <section className="attendance-toolbar">
         <button className="secondary-button" type="button" onClick={ensureSessions}>Prepare timetable sessions</button>
         <button className="present-button" type="button" onClick={() => bulkMark('present')}>Mark whole day present</button>
         <button className="absent-button" type="button" onClick={() => bulkMark('absent')}>Mark whole day absent</button>
+        <button className="secondary-button" type="button" onClick={markSelectedDayAsHoliday} title="Applies to the selected date; existing attendance records are retained">Mark whole day holiday</button>
       </section>
 
       <section className="extra-row">

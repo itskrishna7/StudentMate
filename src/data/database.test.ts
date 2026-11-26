@@ -5,7 +5,8 @@ import { requireDate, requireNonEmpty, requireRange } from './validation'
 import { archiveSubject, deleteSubject, saveSemester, saveSubject } from './academicRepositories'
 import { db } from './database'
 import { findCalendarConflicts, findTimetableOverlap, saveCalendarEvent, saveTimetableRule } from './timetableCalendar'
-import { saveClassSession } from './attendanceRepository'
+import { markDayAsHoliday, saveClassSession } from './attendanceRepository'
+import { calculateAttendanceSummary } from './attendance'
 
 const databases: StudentMateDatabase[] = []
 
@@ -226,6 +227,99 @@ describe('semester and subject repositories', () => {
       }
       await saveCalendarEvent(event)
       await expect(saveCalendarEvent(event)).rejects.toThrow('already recorded')
+    })
+
+    it('marks the selected date as a holiday without deleting attendance records', async () => {
+      const date = '2026-10-05'
+      await db.subjects.add({
+        id: 'holiday-subject',
+        semesterId: 'semester-1',
+        name: 'Holiday test subject',
+        code: 'HOL101',
+        facultyName: '',
+        credits: 3,
+        kind: 'theory',
+        attendanceTarget: 75,
+        color: '#4f46e5',
+        archived: false,
+        createdAt: '',
+        updatedAt: '',
+      })
+      await db.timetableRules.bulkAdd([
+        {
+          id: 'holiday-rule-existing',
+          subjectId: 'holiday-subject',
+          weekday: 1,
+          startTime: '09:00',
+          endTime: '10:00',
+          facultyName: '',
+          room: '',
+          kind: 'lecture',
+          recurring: true,
+          startDate: '2026-07-01',
+          active: true,
+          createdAt: '',
+          updatedAt: '',
+        },
+        {
+          id: 'holiday-rule-new',
+          subjectId: 'holiday-subject',
+          weekday: 1,
+          startTime: '10:00',
+          endTime: '11:00',
+          facultyName: '',
+          room: '',
+          kind: 'lecture',
+          recurring: true,
+          startDate: '2026-07-01',
+          active: true,
+          createdAt: '',
+          updatedAt: '',
+        },
+        {
+          id: 'holiday-rule-out-of-range',
+          subjectId: 'holiday-subject',
+          weekday: 1,
+          startTime: '11:00',
+          endTime: '12:00',
+          facultyName: '',
+          room: '',
+          kind: 'lecture',
+          recurring: true,
+          startDate: '2026-10-06',
+          active: true,
+          createdAt: '',
+          updatedAt: '',
+        },
+      ])
+      await db.classSessions.add({
+        id: 'holiday-existing-session',
+        date,
+        timetableRuleId: 'holiday-rule-existing',
+        subjectId: 'holiday-subject',
+        status: 'conducted',
+        notes: '',
+        createdAt: '',
+        updatedAt: '',
+      })
+      await db.attendanceRecords.add({
+        id: 'holiday-existing-record',
+        sessionId: 'holiday-existing-session',
+        subjectId: 'holiday-subject',
+        status: 'present',
+        recordedAt: '',
+        createdAt: '',
+        updatedAt: '',
+      })
+
+      expect(await markDayAsHoliday(date)).toBe(2)
+      const sessions = await db.classSessions.where('date').equals(date).toArray()
+      expect(sessions.map((session) => session.status)).toEqual(['holiday', 'holiday'])
+      expect(sessions.some((session) => session.timetableRuleId === 'holiday-rule-out-of-range')).toBe(false)
+      expect(await db.attendanceRecords.get('holiday-existing-record')).toMatchObject({ status: 'present' })
+      expect(calculateAttendanceSummary(sessions, await db.attendanceRecords.toArray()).conducted).toBe(0)
+      expect(await markDayAsHoliday(date)).toBe(2)
+      expect(await db.classSessions.where('date').equals(date).count()).toBe(2)
     })
 
     it('rejects invalid timetable time ranges', async () => {
