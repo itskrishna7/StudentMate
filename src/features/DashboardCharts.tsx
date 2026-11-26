@@ -38,8 +38,8 @@ export default function DashboardCharts({ attendance, marks }: DashboardChartsPr
                     contentStyle={{ borderRadius: 12, border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text)' }}
                   />
                   <Legend iconType="circle" wrapperStyle={{ fontSize: 12, paddingTop: 8 }} />
-                  <Bar dataKey="attendance" name="Attendance" fill="#6366f1" radius={[6, 6, 0, 0]} maxBarSize={38} />
-                  <Line type="monotone" dataKey="target" name="Target" stroke="#f59e0b" strokeWidth={2} dot={false} />
+                  <Bar dataKey="attendance" name="Attendance" fill="var(--primary)" radius={[6, 6, 0, 0]} maxBarSize={38} />
+                  <Line type="monotone" dataKey="target" name="Target" stroke="var(--warning)" strokeWidth={2} dot={false} />
                 </ComposedChart>
               </ResponsiveContainer>
             </div>
@@ -47,7 +47,7 @@ export default function DashboardCharts({ attendance, marks }: DashboardChartsPr
               {attendance.map((item) => (
                 <div className="premium-mobile-chart-row" key={item.subjectId}>
                   <div><span>{item.code || item.name}</span><strong>{item.percentage}%</strong></div>
-                  <div className="premium-progress"><span style={{ width: `${item.percentage}%`, background: item.percentage < item.target ? '#f59e0b' : '#6366f1' }} /></div>
+                  <div className="premium-progress"><span style={{ width: `${item.percentage}%`, background: item.percentage < item.target ? 'var(--warning)' : 'var(--primary)' }} /></div>
                   <small>Target {item.target}%</small>
                 </div>
               ))}
@@ -68,7 +68,7 @@ export default function DashboardCharts({ attendance, marks }: DashboardChartsPr
                 <XAxis dataKey="name" tick={{ fill: 'var(--chart-text)', fontSize: 11 }} axisLine={false} tickLine={false} />
                 <YAxis domain={[0, 100]} tick={{ fill: 'var(--chart-text)', fontSize: 11 }} axisLine={false} tickLine={false} />
                 <Tooltip contentStyle={{ borderRadius: 12, border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text)' }} />
-                <Bar dataKey="percentage" name="Assessment" fill="#818cf8" radius={[6, 6, 0, 0]} maxBarSize={38} />
+                <Bar dataKey="percentage" name="Assessment" fill="var(--primary)" radius={[6, 6, 0, 0]} maxBarSize={38} />
               </ComposedChart>
             </ResponsiveContainer>
           </div>

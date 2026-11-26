@@ -53,7 +53,7 @@ test('core routes have no horizontal overflow at release screen sizes', async ({
   ]
   for (const viewport of sizes) {
     await page.setViewportSize(viewport)
-    for (const route of ['/', '/subjects', '/attendance', '/timetable', '/calendar', '/analytics', '/backup']) {
+    for (const route of ['/', '/subjects', '/timetable', '/calendar', '/attendance', '/academics', '/import', '/analytics', '/backup', '/settings']) {
       await page.goto(route)
       await page.waitForTimeout(100)
       const overflow = await page.evaluate(() =>
@@ -62,6 +62,28 @@ test('core routes have no horizontal overflow at release screen sizes', async ({
       expect(overflow, `${route} at ${viewport.width}x${viewport.height}`).toBe(false)
     }
   }
+})
+
+test('mobile navigation keeps every route reachable', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.goto('/')
+  const navigation = page.getByRole('navigation', { name: 'Mobile navigation' })
+  await expect(navigation).toBeVisible()
+  for (const route of ['/subjects', '/timetable', '/calendar', '/attendance', '/academics', '/import', '/analytics', '/backup', '/settings']) {
+    await expect(navigation.locator(`a[href="${route}"]`)).toHaveCount(1)
+  }
+  await navigation.getByRole('link', { name: 'Attendance' }).click()
+  await expect(page.getByRole('heading', { name: 'Attendance' })).toBeVisible()
+})
+
+test('demo settings actions fit narrow mobile screens', async ({ page }) => {
+  await page.setViewportSize({ width: 360, height: 800 })
+  await page.goto('/settings')
+  await page.getByRole('button', { name: 'Enter demo mode' }).click()
+  await page.waitForURL(/demo=1/)
+  await expect(page.getByRole('button', { name: 'Exit demo' })).toBeVisible()
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth)
+  expect(overflow).toBe(false)
 })
 
 test('import rejects empty unsupported and invalid PDF files safely', async ({ page }) => {

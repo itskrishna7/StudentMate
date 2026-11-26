@@ -147,6 +147,19 @@ function AppShell() {
           </div>
         </header>
 
+        <nav className="mobile-nav" aria-label="Mobile navigation">
+          <Link className={location.pathname === '/' ? 'mobile-nav-item active' : 'mobile-nav-item'} to="/"><LayoutDashboard size={17} /><span>Home</span></Link>
+          <Link className={location.pathname === '/subjects' ? 'mobile-nav-item active' : 'mobile-nav-item'} to="/subjects"><BookOpen size={17} /><span>Subjects</span></Link>
+          <Link className={location.pathname === '/timetable' ? 'mobile-nav-item active' : 'mobile-nav-item'} to="/timetable"><Clock3 size={17} /><span>Timetable</span></Link>
+          <Link className={location.pathname === '/calendar' ? 'mobile-nav-item active' : 'mobile-nav-item'} to="/calendar"><CalendarDays size={17} /><span>Calendar</span></Link>
+          <Link className={location.pathname === '/attendance' ? 'mobile-nav-item active' : 'mobile-nav-item'} to="/attendance"><ClipboardCheck size={17} /><span>Attendance</span></Link>
+          <Link className={location.pathname === '/academics' ? 'mobile-nav-item active' : 'mobile-nav-item'} to="/academics"><Calculator size={17} /><span>Academics</span></Link>
+          <Link className={location.pathname === '/import' ? 'mobile-nav-item active' : 'mobile-nav-item'} to="/import"><FileUp size={17} /><span>Import</span></Link>
+          <Link className={location.pathname === '/analytics' ? 'mobile-nav-item active' : 'mobile-nav-item'} to="/analytics"><BarChart3 size={17} /><span>Analytics</span></Link>
+          <Link className={location.pathname === '/backup' ? 'mobile-nav-item active' : 'mobile-nav-item'} to="/backup"><DatabaseBackup size={17} /><span>Backup</span></Link>
+          <Link className={location.pathname === '/settings' ? 'mobile-nav-item active' : 'mobile-nav-item'} to="/settings"><Settings size={17} /><span>Settings</span></Link>
+        </nav>
+
         {!online && (
           <div className="offline-banner" role="status">
             <WifiOff size={16} />

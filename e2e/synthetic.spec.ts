@@ -453,6 +453,7 @@ test.describe('Synthetic real-world semester', () => {
 
     await page.goto('/attendance')
     await expect(page.getByRole('heading', { name: 'Attendance' })).toBeVisible()
+    await page.getByLabel('Date').fill(syntheticDate)
     await expect(page.locator('.session-card').filter({ hasText: 'Data Structures' }).first()).toBeVisible()
 
     await page.getByRole('button', { name: 'Prepare timetable sessions' }).click()
@@ -464,6 +465,7 @@ test.describe('Synthetic real-world semester', () => {
 
     await page.reload()
     await expect(page.getByRole('heading', { name: 'Attendance' })).toBeVisible()
+    await page.getByLabel('Date').fill(syntheticDate)
     await expect(page.locator('.session-card').filter({ hasText: 'Applied Physics' }).first()).toBeVisible()
 
     await page.goto('/calendar')
