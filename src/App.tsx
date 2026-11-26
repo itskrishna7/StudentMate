@@ -1486,7 +1486,7 @@ function ImportPage() {
           </label>
           <button className="primary-button" type="button" disabled={!file || processing} onClick={processFile}>{processing ? 'Processing locally...' : 'Extract and review'}</button>
         </div>
-        <p className="privacy-note">Documents are processed in this browser. PDF text is preferred; scanned pages use local Tesseract OCR. English OCR resources are cached after first download.</p>
+        <p className="privacy-note">Documents stay in this browser. PDF text is preferred; scanned pages use local Tesseract OCR with the English model bundled and cached with the app for offline use.</p>
         {processing && (
           <div className="import-progress" role="status" aria-live="polite">
             <div className="import-progress-heading"><span>{progress?.message ?? 'Starting local document extraction...'}</span><strong>{Math.round((progress?.progress ?? 0) * 100)}%</strong></div>

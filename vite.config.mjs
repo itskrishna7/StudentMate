@@ -49,7 +49,7 @@ export default defineConfig({
       },
       workbox: {
         navigateFallback: 'index.html',
-        globPatterns: ['**/*.{js,css,html,svg,png,ico,webp,woff2}'],
+        globPatterns: ['**/*.{js,css,html,svg,png,ico,webp,woff2}', 'tesseract-data/eng.traineddata.gz'],
         globIgnores: ['tesseract-core/**/*'],
         maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,
         cleanupOutdatedCaches: true,
@@ -78,4 +78,13 @@ export default defineConfig({
       },
     }),
   ],
+  build: {
+    rollupOptions: {
+      output: {
+        assetFileNames: (assetInfo) => assetInfo.name === 'eng.traineddata.gz'
+          ? 'tesseract-data/eng.traineddata.gz'
+          : 'assets/[name]-[hash][extname]',
+      },
+    },
+  },
 })

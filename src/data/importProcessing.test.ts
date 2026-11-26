@@ -461,4 +461,130 @@ describe('import validation', () => {
     const review = buildImportReview('academic_calendar', '<img src=x onerror=alert(1)>')
     expect(review.sourceText).toContain('<img')
   })
+
+  it('maps PDF timetable rows with merged cells, wrapped labels, lab rooms, and section faculty', () => {
+    const extraction = {
+      sourceText: 'Weekly timetable Monday Tuesday Wednesday DBMS Lab C++ Societal Project',
+      pages: [{
+        page: 1,
+        text: '',
+        source: 'pdf_text' as const,
+        lines: [
+          { page: 1, y: 430, text: 'Class Room: Lab-CR-402' },
+          { page: 1, y: 400, text: '08:30-09:25 09:25-10:20 10:40-11:35 11:35-12:30', segments: [
+            { text: '08:30-09:25', x: 100, width: 70 },
+            { text: '09:25-10:20', x: 250, width: 70 },
+            { text: '10:40-11:35', x: 400, width: 70 },
+            { text: '11:35-12:30', x: 550, width: 70 },
+          ] },
+          { page: 1, y: 350, text: 'Monday DBMS LAB C++ SOCIETAL', segments: [
+            { text: 'Monday', x: 0, width: 50 },
+            { text: 'DBMS LAB (Batch 1) (LB:511A)', x: 100, width: 280 },
+            { text: 'C++', x: 400, width: 20 },
+            { text: 'SOCIETAL', x: 550, width: 60 },
+          ] },
+          { page: 1, y: 340, text: 'PROJECT', segments: [{ text: 'PROJECT', x: 550, width: 60 }] },
+          { page: 1, y: 300, text: 'Tuesday OS', segments: [
+            { text: 'Tuesday', x: 0, width: 50 },
+            { text: 'OS', x: 100, width: 20 },
+          ] },
+          { page: 1, y: 250, text: 'Wednesday MATHS', segments: [
+            { text: 'Wednesday', x: 0, width: 60 },
+            { text: 'MATHS', x: 100, width: 40 },
+          ] },
+          { page: 1, y: 190, text: 'SUBJECT CODE FACULTY FACULTY FOR PRACTICAL', segments: [
+            { text: 'SUBJECT', x: 45, width: 50 },
+            { text: 'CODE', x: 300, width: 30 },
+            { text: 'FACULTY', x: 400, width: 50 },
+            { text: 'FACULTY FOR PRACTICAL', x: 600, width: 120 },
+          ] },
+          { page: 1, y: 180, text: 'Database Management Systems (DBMS) Dr. Radhika K R', segments: [
+            { text: 'Database Management Systems (DBMS)', x: 45, width: 180 },
+            { text: '18CS303', x: 300, width: 40 },
+            { text: 'Dr. Radhika K R', x: 400, width: 70 },
+          ] },
+          { page: 1, y: 170, text: 'Batch 1: Prof. Lab Teacher', segments: [
+            { text: 'Batch 1: Prof. Lab Teacher', x: 600, width: 140 },
+          ] },
+        ],
+      }],
+    }
+
+    const review = buildImportReview('weekly_timetable', extraction)
+    expect(review.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        weekday: 1,
+        title: 'DBMS LAB (Batch 1)',
+        startTime: '08:30',
+        endTime: '10:20',
+        room: 'LB: 511A',
+        teacher: 'Prof. Lab Teacher',
+      }),
+      expect.objectContaining({
+        weekday: 1,
+        title: 'C++',
+        startTime: '10:40',
+        endTime: '11:35',
+      }),
+      expect.objectContaining({
+        weekday: 1,
+        title: 'SOCIETAL PROJECT',
+        startTime: '11:35',
+        endTime: '12:30',
+      }),
+    ]))
+  })
+
+  it('preserves calendar event boundaries and does not append distant footer text', () => {
+    const extraction = {
+      sourceText: 'Tentative Calendar of Events 2026-27',
+      pages: [{
+        page: 1,
+        text: '',
+        source: 'pdf_text' as const,
+        lines: [
+          { page: 1, y: 400, text: 'Date(s) Academic Events & Holidays', segments: [
+            { text: 'Date(s)', x: 100, width: 40 },
+            { text: 'Academic Events & Holidays', x: 250, width: 140 },
+          ] },
+          { page: 1, y: 300, text: '31 Dec. Withdrawal of Courses (31 Dec.)', segments: [
+            { text: '31 Dec.', x: 100, width: 45 },
+            { text: 'Withdrawal of Courses (31 Dec.)', x: 250, width: 190 },
+          ] },
+          { page: 1, y: 260, text: '18 Dec. IA2 QPs Scrutiny (18 Dec.)', segments: [
+            { text: '18 Dec.', x: 100, width: 45 },
+            { text: 'IA2 QPs Scrutiny (18 Dec.)', x: 250, width: 170 },
+          ] },
+          { page: 1, y: 240, text: 'After 11 Jan. SEMESTER END EXAMINATIONS', segments: [
+            { text: 'After 11 Jan.', x: 100, width: 60 },
+            { text: 'SEMESTER END EXAMINATIONS', x: 250, width: 170 },
+          ] },
+          { page: 1, y: 50, text: 'DEAN ACADEMICS', segments: [{ text: 'DEAN ACADEMICS', x: 250, width: 90 }] },
+        ],
+      }],
+    }
+
+    const review = buildImportReview('academic_calendar', extraction)
+    expect(review.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        title: 'Withdrawal of Courses',
+        eventType: 'deadline',
+        startDate: '2026-12-31',
+      }),
+      expect.objectContaining({
+        title: 'SEMESTER END EXAMINATIONS',
+        eventType: 'exam',
+        warnings: expect.arrayContaining(['Date is a boundary only; the exact event date was not stated']),
+      }),
+      expect.objectContaining({
+        title: 'IA2 QPs Scrutiny',
+        eventType: 'internal_exam',
+        startDate: '2026-12-18',
+      }),
+    ]))
+    const examination = review.items.find(({ title }) => title === 'SEMESTER END EXAMINATIONS')!
+    expect(examination).not.toHaveProperty('startDate')
+    expect(examination).not.toHaveProperty('endDate')
+    expect(review.items.find(({ title }) => title === 'Withdrawal of Courses')?.title).not.toContain('DEAN ACADEMICS')
+  })
 })
