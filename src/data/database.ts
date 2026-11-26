@@ -2,7 +2,7 @@ import Dexie, { type Table } from 'dexie'
 import type {
   AppSetting, Assessment, CalendarEvent, ChangeLog, ClassSession,
   AttendanceRecord, GradingScale, ImportJob, Mark, Semester,
-  Subject, TimetableRule,
+  StudentSemesterResult, Subject, TimetableRule,
 } from './models'
 
 export class StudentMateDatabase extends Dexie {
@@ -19,6 +19,7 @@ export class StudentMateDatabase extends Dexie {
   gradingScales!: Table<GradingScale, string>
   appSettings!: Table<AppSetting, string>
   importJobs!: Table<ImportJob, string>
+  studentSemesterResults!: Table<StudentSemesterResult, string>
 
   constructor(name = 'StudentMate') {
     super(name)
@@ -36,6 +37,22 @@ export class StudentMateDatabase extends Dexie {
       gradingScales: 'id, name, isDefault',
       appSettings: 'id, &key',
       importJobs: 'id, kind, status, sourceType, createdAt',
+    })
+    this.version(2).stores({
+      semesters: 'id, name, startDate, endDate, isCurrent',
+      subjects: 'id, semesterId, code, kind, archived',
+      timetableRules: 'id, subjectId, weekday, startDate, endDate, active',
+      calendarEvents: 'id, type, startDate, endDate, recurring, subjectId',
+      classSessions: 'id, date, timetableRuleId, subjectId, status',
+      attendanceRecords: 'id, sessionId, subjectId, status, recordedAt',
+      attendanceChangeLog: 'id, entityType, entityId, action',
+      scheduleChangeLog: 'id, entityType, entityId, action',
+      assessments: 'id, subjectId, type, date',
+      marks: 'id, assessmentId, subjectId',
+      gradingScales: 'id, name, isDefault',
+      appSettings: 'id, &key',
+      importJobs: 'id, kind, status, sourceType, createdAt',
+      studentSemesterResults: 'id, &semesterNumber, status',
     })
   }
 }

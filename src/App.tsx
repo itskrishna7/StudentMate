@@ -18,6 +18,10 @@ import { enterDemoMode, isDemoMode, resetDemoData, seedDemoData } from './data/d
 
 const AnalyticsPage = lazy(() => import('./features/AnalyticsPage'))
 const DashboardCharts = lazy(() => import('./features/DashboardCharts'))
+const AcademicPerformancePage = lazy(() => import('./features/AcademicPerformancePage'))
+const AcademicPerformanceWidget = lazy(() => import('./features/AcademicPerformancePage').then((module) => ({
+  default: module.AcademicPerformanceWidget,
+})))
 
 type Theme = 'light' | 'dark'
 
@@ -100,6 +104,10 @@ function AppShell() {
             <Calculator size={19} />
             <span>Academics</span>
           </Link>
+          <Link className={location.pathname === '/performance' ? 'nav-item active' : 'nav-item'} to="/performance">
+            <GraduationCap size={19} />
+            <span>Performance</span>
+          </Link>
           <Link className={location.pathname === '/import' ? 'nav-item active' : 'nav-item'} to="/import">
             <FileUp size={19} />
             <span>Import</span>
@@ -154,6 +162,7 @@ function AppShell() {
           <Link className={location.pathname === '/calendar' ? 'mobile-nav-item active' : 'mobile-nav-item'} to="/calendar"><CalendarDays size={17} /><span>Calendar</span></Link>
           <Link className={location.pathname === '/attendance' ? 'mobile-nav-item active' : 'mobile-nav-item'} to="/attendance"><ClipboardCheck size={17} /><span>Attendance</span></Link>
           <Link className={location.pathname === '/academics' ? 'mobile-nav-item active' : 'mobile-nav-item'} to="/academics"><Calculator size={17} /><span>Academics</span></Link>
+          <Link className={location.pathname === '/performance' ? 'mobile-nav-item active' : 'mobile-nav-item'} to="/performance"><GraduationCap size={17} /><span>Performance</span></Link>
           <Link className={location.pathname === '/import' ? 'mobile-nav-item active' : 'mobile-nav-item'} to="/import"><FileUp size={17} /><span>Import</span></Link>
           <Link className={location.pathname === '/analytics' ? 'mobile-nav-item active' : 'mobile-nav-item'} to="/analytics"><BarChart3 size={17} /><span>Analytics</span></Link>
           <Link className={location.pathname === '/backup' ? 'mobile-nav-item active' : 'mobile-nav-item'} to="/backup"><DatabaseBackup size={17} /><span>Backup</span></Link>
@@ -179,6 +188,7 @@ function AppShell() {
           <Route path="/calendar" element={<CalendarPage />} />
           <Route path="/attendance" element={<AttendancePage />} />
           <Route path="/academics" element={<AcademicsPage />} />
+          <Route path="/performance" element={<Suspense fallback={<div className="page"><div className="loading-card" role="status">Loading academic performance...</div></div>}><AcademicPerformancePage /></Suspense>} />
           <Route path="/import" element={<ImportPage />} />
           <Route path="/analytics" element={<Suspense fallback={<div className="page"><div className="loading-card" role="status">Loading analytics...</div></div>}><AnalyticsPage /></Suspense>} />
           <Route path="/backup" element={<BackupPage />} />
@@ -463,6 +473,9 @@ function Dashboard() {
           </div>
         </>
       )}
+      <Suspense fallback={<section className="premium-panel"><div className="loading-card" role="status">Loading performance...</div></section>}>
+        <AcademicPerformanceWidget />
+      </Suspense>
     </div>
   )
 }
@@ -1496,7 +1509,13 @@ function ImportPage() {
             <span><strong>{review.items.filter((item) => itemWarnings(item).some((warning) => /overlaps|already exists/.test(warning))).length}</strong> existing conflicts</span>
           </div>
           {review.items.length === 0 ? (
-            <p className="muted-state">No structured entries were found. Choose the correct document type or add rows manually.</p>
+            <>
+              <p className="muted-state">No event rows could be identified. For scanned month-grid calendars, review the OCR text below and add or correct entries manually.</p>
+              <details className="source-document">
+                <summary>View extracted OCR text</summary>
+                <pre>{extraction?.pages.map((page) => `Page ${page.page} (${page.source})\n${page.text}`).join('\n\n')}</pre>
+              </details>
+            </>
           ) : (
             <div className="import-review-layout">
               <div className="review-list">

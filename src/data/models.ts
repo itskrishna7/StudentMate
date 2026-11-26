@@ -90,6 +90,17 @@ export interface Mark extends BaseRecord {
   enteredAt: string
 }
 
+export type SemesterResultStatus = 'pending' | 'current' | 'completed'
+export type CGPACalculationMethod = 'simple' | 'credit_weighted'
+
+export interface StudentSemesterResult extends BaseRecord {
+  semesterNumber: number
+  status: SemesterResultStatus
+  sgpa?: number
+  totalCredits?: number
+  academicYear?: string
+}
+
 export interface GradeBoundary {
   minPercentage: number
   gradePoint: number

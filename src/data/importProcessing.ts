@@ -17,6 +17,7 @@ export interface ExtractedSegment {
   text: string
   x: number
   width: number
+  height?: number
 }
 
 export interface ExtractedLine {
@@ -24,6 +25,7 @@ export interface ExtractedLine {
   page: number
   y?: number
   segments?: ExtractedSegment[]
+  timeInferred?: boolean
 }
 
 export interface ExtractedPage {
@@ -182,6 +184,21 @@ function createOcrCanvas(source: CanvasImageSource, width: number, height: numbe
   return canvas
 }
 
+function rotateCanvas(source: HTMLCanvasElement, degrees: number): HTMLCanvasElement {
+  const sideways = degrees === 90 || degrees === 270
+  const canvas = document.createElement('canvas')
+  canvas.width = sideways ? source.height : source.width
+  canvas.height = sideways ? source.width : source.height
+  const context = canvas.getContext('2d')
+  if (!context) throw new Error('This browser could not rotate the document image for OCR')
+  context.fillStyle = '#fff'
+  context.fillRect(0, 0, canvas.width, canvas.height)
+  context.translate(canvas.width / 2, canvas.height / 2)
+  context.rotate((degrees * Math.PI) / 180)
+  context.drawImage(source, -source.width / 2, -source.height / 2)
+  return canvas
+}
+
 async function createOcrWorker(onWorkerProgress?: (status: string, progress: number) => void) {
   const { createWorker } = await import('tesseract.js')
   const corePath = new URL(`${import.meta.env.BASE_URL}tesseract-core/`, window.location.origin).href
@@ -212,10 +229,23 @@ async function recognizeCanvas(
   page: number,
   pageCount: number,
   callback?: ProgressCallback,
-): Promise<{ text: string; confidence: number }> {
+): Promise<{ text: string; confidence: number; lines: ExtractedLine[] }> {
   try {
-    const result = await timeout(worker.recognize(canvas), `OCR timed out on page ${page}. Try a smaller or clearer document.`)
-    return { text: result.data.text, confidence: result.data.confidence / 100 }
+    const result = await timeout(worker.recognize(canvas, {}, { blocks: true }), `OCR timed out on page ${page}. Try a smaller or clearer document.`)
+    const lines = result.data.blocks?.flatMap((block) =>
+      block.paragraphs.flatMap((paragraph) => paragraph.lines.map((line) => ({
+        page,
+        text: line.text.trim(),
+        y: line.bbox.y0,
+        segments: line.words.map((word) => ({
+          text: word.text.trim(),
+          x: word.bbox.x0,
+          width: word.bbox.x1 - word.bbox.x0,
+          height: word.bbox.y1 - word.bbox.y0,
+        })).filter((segment) => segment.text),
+      })).filter((line) => line.text)),
+    ) ?? []
+    return { text: result.data.text, confidence: result.data.confidence / 100, lines }
   } catch (cause) {
     if (cause instanceof Error && cause.message.startsWith('OCR timed out')) throw cause
     throw new Error(`OCR could not read page ${page}. The document may be too blurry or the OCR resources may be unavailable.`)
@@ -230,13 +260,156 @@ async function recognizeCanvas(
   }
 }
 
+function ocrStructureScore(text: string): number {
+  const normalized = text.toLowerCase()
+  const months = normalized.match(/\b(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec)\b/g) ?? []
+  const weekdays = normalized.match(/\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tue|tues|wed|thu|thur|thurs|fri|sat|sun)\b/g) ?? []
+  const dates = normalized.match(/\b(?:\d{1,2}[/-]\d{1,2}[/-](?:19|20)\d{2}|\d{1,2}\s+[a-z]{3,9}\s+(?:19|20)\d{2})\b/g) ?? []
+  const times = normalized.match(/\b\d{1,2}(?::|\.)\d{2}\s*(?:am|pm)?\b/g) ?? []
+  const timeRanges = normalized.match(/\b\d{1,2}[:.]\d{2}\s*[-–—]\s*\d{1,2}[:.]\d{2}\b/g) ?? []
+  const academicTerms = normalized.match(/\b(calendar|semester|holiday|holidays|examination|exam|vacation|registration|classes|lecture|timetable)\b/g) ?? []
+  const recognizedWords = normalized.match(/\b[a-z]{4,}\b/g) ?? []
+  return new Set(months).size * 4
+    + new Set(weekdays).size * 5
+    + dates.length * 3
+    + times.length
+    + timeRanges.length * 12
+    + academicTerms.length * 2
+    + Math.min(recognizedWords.length, 40) * 0.15
+}
+
+async function recognizeBestOrientation(
+  worker: Awaited<ReturnType<typeof createOcrWorker>>,
+  canvas: HTMLCanvasElement,
+  page: number,
+  pageCount: number,
+  callback?: ProgressCallback,
+): Promise<{ text: string; confidence: number; lines: ExtractedLine[] }> {
+  let best = await recognizeCanvas(worker, canvas, page, pageCount, callback)
+  let bestScore = ocrStructureScore(best.text)
+  const hasReadableDatedEvent =
+    /\b\d{1,2}\s+[a-z]{3,9}\s+(?:19|20)\d{2}\b|\b(?:19|20)\d{2}[-/.]\d{1,2}[-/.]\d{1,2}\b/i.test(best.text) &&
+    /\b(holiday|exam|examination|registration|semester|classes|event)\b/i.test(best.text)
+  const timetablePage = /\b(timetable|time\s*table|period|lecture)\b/i.test(best.text)
+  if ((bestScore >= 18 && !timetablePage) || hasReadableDatedEvent) return best
+
+  try {
+    for (const mode of ['11', '6'] as const) {
+      await worker.setParameters({ tessedit_pageseg_mode: mode as import('tesseract.js').PSM })
+      const candidate = await recognizeCanvas(worker, canvas, page, pageCount, callback)
+      const score = ocrStructureScore(candidate.text)
+      if (score > bestScore) {
+        best = candidate
+        bestScore = score
+      }
+    }
+  } finally {
+    await worker.setParameters({ tessedit_pageseg_mode: '3' as import('tesseract.js').PSM })
+  }
+  if (bestScore >= 18) return best
+
+  for (const degrees of [90, 270]) {
+    const rotated = rotateCanvas(canvas, degrees)
+    try {
+      const candidate = await recognizeCanvas(worker, rotated, page, pageCount, callback)
+      const score = ocrStructureScore(candidate.text)
+      if (score > bestScore) {
+        best = candidate
+        bestScore = score
+      }
+      if (bestScore >= 18) break
+    } finally {
+      rotated.width = 0
+      rotated.height = 0
+    }
+  }
+  return best
+}
+
+async function recognizeTimetableRows(
+  worker: Awaited<ReturnType<typeof createOcrWorker>>,
+  canvas: HTMLCanvasElement,
+  lines: ExtractedLine[],
+  page: number,
+  pageCount: number,
+  callback?: ProgressCallback,
+): Promise<ExtractedLine[] | undefined> {
+  const sourceText = lines.map((line) => line.text).join(' ')
+  if (!/\b(timetable|time\s*table|period|lecture)\b/i.test(sourceText)) return undefined
+
+  const dayLines = lines.filter((line) => line.y !== undefined && DAY_PATTERN.test(line.text))
+  if (dayLines.length < 2) return undefined
+
+  const croppedLines: ExtractedLine[] = []
+  const cropCanvas = document.createElement('canvas')
+  const canvasContext = cropCanvas.getContext('2d')
+  if (!canvasContext) throw new Error('This browser could not crop timetable rows for OCR')
+  const sortedDayLines = [...dayLines].sort((a, b) => a.y! - b.y!)
+  const rowPitches = sortedDayLines.slice(1).flatMap((line, index) => {
+    const previous = sortedDayLines[index]!
+    const dayGap = (getWeekday(line.text) ?? 0) - (getWeekday(previous.text) ?? 0)
+    return dayGap > 0 ? [(line.y! - previous.y!) / dayGap] : []
+  }).sort((a, b) => a - b)
+  const typicalPitch = rowPitches.length
+    ? rowPitches[Math.floor(rowPitches.length / 2)]!
+    : canvas.height * 0.05
+  const rowHeight = Math.max(32, Math.min(110, Math.round(typicalPitch * 0.65)))
+  cropCanvas.width = canvas.width
+  try {
+    for (const [index, line] of dayLines.entries()) {
+      const top = Math.max(0, Math.floor(line.y! - 2))
+      const bottom = Math.min(canvas.height, top + rowHeight)
+      if (bottom <= top) continue
+      cropCanvas.height = bottom - top
+      canvasContext.drawImage(canvas, 0, top, canvas.width, bottom - top, 0, 0, canvas.width, bottom - top)
+      emitProgress(callback, {
+        phase: 'ocr',
+        page,
+        pageCount,
+        progress: ((page - 1) + (index + 1) / dayLines.length) / pageCount,
+        message: `Reading timetable row ${index + 1} of ${dayLines.length}`,
+      })
+      let best = line
+      let bestScore = ocrStructureScore(line.text)
+      for (const mode of ['11', '6'] as const) {
+        await worker.setParameters({ tessedit_pageseg_mode: mode as import('tesseract.js').PSM })
+        const candidate = await recognizeCanvas(worker, cropCanvas, page, pageCount, callback)
+        const score = ocrStructureScore(candidate.text)
+        if (score > bestScore && DAY_PATTERN.test(candidate.text)) {
+          best = {
+            page,
+            y: top,
+            text: candidate.text.trim(),
+            segments: candidate.lines.flatMap((resultLine) => resultLine.segments ?? []).sort((a, b) => a.x - b.x),
+          }
+          bestScore = score
+        }
+      }
+      const segments = best.segments?.length ? best.segments : line.segments
+      if (segments?.length) croppedLines.push({ ...best, segments })
+    }
+  } finally {
+    await worker.setParameters({ tessedit_pageseg_mode: '3' as import('tesseract.js').PSM })
+    cropCanvas.width = 0
+    cropCanvas.height = 0
+  }
+
+  if (!croppedLines.length) return undefined
+  const bodyTop = Math.min(...dayLines.map((line) => line.y! - 2))
+  const bodyBottom = Math.max(...dayLines.map((line) => line.y! + rowHeight))
+  return [
+    ...lines.filter((line) => line.y === undefined || line.y < bodyTop || line.y > bodyBottom),
+    ...croppedLines,
+  ].sort((a, b) => (a.y ?? 0) - (b.y ?? 0))
+}
+
 export async function extractDocument(file: File, onProgress?: ProgressCallback): Promise<DocumentExtraction> {
   const type = validateImportFile(file)
   if (type === 'image') {
     const bitmap = await createImageBitmap(file).catch(() => {
       throw new Error('The image could not be opened. Try a valid PNG or JPEG file.')
     })
-    const ratio = Math.min(1, Math.sqrt(MAX_CANVAS_PIXELS / (bitmap.width * bitmap.height)), 2800 / Math.max(bitmap.width, bitmap.height))
+    const ratio = Math.min(2, Math.sqrt(MAX_CANVAS_PIXELS / (bitmap.width * bitmap.height)), 2800 / Math.max(bitmap.width, bitmap.height))
     const width = Math.max(1, Math.round(bitmap.width * ratio))
     const height = Math.max(1, Math.round(bitmap.height * ratio))
     const canvas = createOcrCanvas(bitmap, width, height)
@@ -246,8 +419,12 @@ export async function extractDocument(file: File, onProgress?: ProgressCallback)
       emitProgress(onProgress, { phase: 'ocr', page: 1, pageCount: 1, progress, message: status })
     })
     try {
-      const result = await recognizeCanvas(worker, canvas, 1, 1, onProgress)
-      const lines = result.text.split(/\r?\n/).map((text) => text.trim()).filter(Boolean).map((text) => ({ text, page: 1 }))
+      const result = await recognizeBestOrientation(worker, canvas, 1, 1, onProgress)
+      const rowLines = await recognizeTimetableRows(worker, canvas, result.lines, 1, 1, onProgress)
+      const recognizedLines = rowLines ?? result.lines
+      const lines = recognizedLines.length > 0
+        ? recognizedLines
+        : result.text.split(/\r?\n/).map((text) => text.trim()).filter(Boolean).map((text) => ({ text, page: 1 }))
       return { pages: [{ page: 1, text: result.text, lines, source: 'ocr', ocrConfidence: result.confidence }], sourceText: result.text.slice(0, MAX_SOURCE_TEXT_LENGTH) }
     } finally {
       await worker.terminate()
@@ -290,9 +467,9 @@ export async function extractDocument(file: File, onProgress?: ProgressCallback)
         }] : []
       })
       const textLines = makeLinesFromPdfItems(items, pageNumber)
-      const text = textLines.map((line) => line.text).join('\n')
-      if (text.replace(/[^\p{L}\p{N}]/gu, '').length >= 24) {
-        pages.push({ page: pageNumber, text, lines: textLines, source: 'pdf_text' })
+      const pdfText = textLines.map((line) => line.text).join('\n')
+      if (pdfText.replace(/[^\p{L}\p{N}]/gu, '').length >= 24) {
+        pages.push({ page: pageNumber, text: pdfText, lines: textLines, source: 'pdf_text' })
         page.cleanup()
         continue
       }
@@ -326,8 +503,12 @@ export async function extractDocument(file: File, onProgress?: ProgressCallback)
           message: status,
         })
       })
-      const result = await recognizeCanvas(worker, prepared, pageNumber, pdfDocument.numPages, onProgress)
-      const lines = result.text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line) => ({ text: line, page: pageNumber }))
+      const result = await recognizeBestOrientation(worker, prepared, pageNumber, pdfDocument.numPages, onProgress)
+      const rowLines = await recognizeTimetableRows(worker, prepared, result.lines, pageNumber, pdfDocument.numPages, onProgress)
+      const recognizedLines = rowLines ?? result.lines
+      const lines = recognizedLines.length > 0
+        ? recognizedLines
+        : result.text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line) => ({ text: line, page: pageNumber }))
       pages.push({ page: pageNumber, text: result.text, lines, source: 'ocr', ocrConfidence: result.confidence })
       prepared.width = 0
       prepared.height = 0
@@ -350,7 +531,21 @@ const MONTHS: Record<string, number> = {
   october: 10, nov: 11, november: 11, dec: 12, december: 12,
 }
 
-interface DateMatch { start: number; end: number; iso: string; endIso?: string; ambiguous: boolean }
+interface DateMatch {
+  start: number
+  end: number
+  iso: string
+  endIso?: string
+  month?: number
+  ambiguous: boolean
+  inferredYear?: boolean
+}
+
+interface AcademicYearRange {
+  label: string
+  startYear: number
+  endYear: number
+}
 
 function validIsoDate(year: number, month: number, day: number): string | undefined {
   const date = new Date(Date.UTC(year, month - 1, day))
@@ -358,7 +553,7 @@ function validIsoDate(year: number, month: number, day: number): string | undefi
   return `${year.toString().padStart(4, '0')}-${month.toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}`
 }
 
-function findDateMatches(text: string): DateMatch[] {
+function findDateMatches(text: string, inferredYear?: number): DateMatch[] {
   const matches: DateMatch[] = []
   const ranges: Array<{ regex: RegExp; parse: (match: RegExpExecArray) => [string | undefined, string | undefined] }> = [
     {
@@ -397,6 +592,7 @@ function findDateMatches(text: string): DateMatch[] {
         end: match.index! + match[0].length,
         iso,
         endIso,
+        month: Number(iso.slice(5, 7)),
         ambiguous: false,
       })
     }
@@ -410,82 +606,225 @@ function findDateMatches(text: string): DateMatch[] {
   for (const { regex, parse } of patterns) {
     for (const match of text.matchAll(regex)) {
       const parsed = parse(match)
-      if (parsed.iso) matches.push({ start: match.index!, end: match.index! + match[0].length, iso: parsed.iso, ambiguous: parsed.ambiguous ?? false })
+      if (parsed.iso) matches.push({
+        start: match.index!,
+        end: match.index! + match[0].length,
+        iso: parsed.iso,
+        month: Number(parsed.iso.slice(5, 7)),
+        ambiguous: parsed.ambiguous ?? false,
+      })
+    }
+  }
+  if (inferredYear !== undefined) {
+    const monthDatePatterns = [
+      {
+        regex: /\b(\d{1,2})\s*(?:-|–|—|\bto\b)\s*(\d{1,2})\s*([A-Za-z]{3,9})\.?(?![A-Za-z])/gi,
+        parse: (match: RegExpExecArray, month: number): { startDay: number; endDay?: number; month: number } => ({
+          startDay: Number(match[1]),
+          endDay: Number(match[2]),
+          month,
+        }),
+      },
+      {
+        regex: /\b(\d{1,2})\s*([A-Za-z]{3,9})\.?(?![A-Za-z])/gi,
+        parse: (match: RegExpExecArray, month: number): { startDay: number; endDay?: number; month: number } => ({
+          startDay: Number(match[1]),
+          month,
+        }),
+      },
+      {
+        regex: /\b([A-Za-z]{3,9})\.?\s+(\d{1,2})\s*(?:-|–|—)\s*(\d{1,2})\b/gi,
+        parse: (match: RegExpExecArray, month: number): { startDay: number; endDay?: number; month: number } => ({
+          startDay: Number(match[2]),
+          endDay: Number(match[3]),
+          month,
+        }),
+      },
+    ]
+    for (const { regex, parse } of monthDatePatterns) {
+      for (const match of text.matchAll(regex)) {
+        const monthText = (regex === monthDatePatterns[2]!.regex ? match[1] : match[3] ?? match[2])!
+        const month = MONTHS[monthText.toLowerCase().replace(/\.$/, '')]
+        if (!month) continue
+        const date = parse(match, month)
+        const iso = validIsoDate(inferredYear, date.month, date.startDay)
+        const endIso = date.endDay === undefined ? undefined : validIsoDate(inferredYear, date.month, date.endDay)
+        if (!iso || (date.endDay !== undefined && !endIso)) continue
+        matches.push({
+          start: match.index!,
+          end: match.index! + match[0].length,
+          iso,
+          ...(endIso ? { endIso } : {}),
+          month,
+          ambiguous: false,
+          inferredYear: true,
+        })
+      }
     }
   }
   return matches.sort((a, b) => a.start - b.start).filter((match, index, list) => index === 0 || match.start >= list[index - 1]!.end)
 }
 
+function findAcademicYear(text: string): AcademicYearRange | undefined {
+  const match = /\b((?:19|20)\d{2})\s*[-/]\s*((?:19|20)\d{2}|\d{2})\b(?!\s*\/\s*\d{1,2}\b)/.exec(text)
+  if (!match) return undefined
+  const startYear = Number(match[1])
+  const yearSuffix = match[2]!
+  let endYear = yearSuffix.length === 2
+    ? Math.floor(startYear / 100) * 100 + Number(yearSuffix)
+    : Number(yearSuffix)
+  if (endYear < startYear) endYear += 100
+  return { label: match[0].replace(/\s+/g, ''), startYear, endYear }
+}
+
 function inferCalendarType(text: string): ExtractedReviewItem['eventType'] | undefined {
-  if (/\b(internal|sessional|mid[- ]?term|unit)\s*(exam|test)|exam(?:ination)?\s*(i|ii|1|2|one|two)\b/i.test(text)) return 'internal_exam'
+  if (/\b(internal|sessional|mid[- ]?term|unit)\s*(exam|test|assessment)|exam(?:ination)?\s*(i|ii|1|2|one|two)\b|\b(?:cca|ia)\s*[12]?\b/i.test(text)) return 'internal_exam'
   if (/\b(exam|examination|semester exam|university exam|end[- ]?term)\b/i.test(text)) return 'exam'
   if (/\b(holiday|holidays|public holiday|closed)\b/i.test(text)) return 'holiday'
   if (/\b(vacation|recess|break)\b/i.test(text)) return 'vacation'
   if (/\b(registration|enrol(?:l)?ment|deadline|submission|last date|due date)\b/i.test(text)) return 'deadline'
-  if (/\b(result|orientation|commencement|commencement|semester begins|semester ends|classes begin)\b/i.test(text)) return 'special'
-  if (/\b(event|festival|ceremony|workshop|conference)\b/i.test(text)) return 'event'
+  if (/\b(result|orientation|commencement|semester begins|semester ends|classes begin|last working day)\b/i.test(text)) return 'special'
+  if (/\b(event|festival|ceremony|workshop|conference|meeting|formation|feedback|synopsis|assessment)\b/i.test(text)) return 'event'
   return undefined
 }
 
-function makeCalendarItems(pages: ExtractedPage[], requestedType: Exclude<DocumentType, 'weekly_timetable' | 'unknown'>): ExtractedReviewItem[] {
+function groupCalendarLine(line: ExtractedLine): Array<{ text: string; x?: number; y?: number; height?: number }> {
+  const segments = line.segments?.filter((segment) => segment.text.trim()).sort((a, b) => a.x - b.x)
+  if (!segments?.length) return [{ text: line.text.trim() }]
+  if (segments.length === 1) return [{ text: segments[0]!.text.trim(), x: segments[0]!.x }]
+
+  const heights = segments.map((segment) => segment.height ?? 0).filter((height) => height > 0).sort((a, b) => a - b)
+  const medianHeight = heights.length > 0 ? heights[Math.floor(heights.length / 2)]! : 0
+  const columnGap = Math.max(100, medianHeight * 3)
+  const groups: Array<{ text: string; x: number; right: number }> = []
+  for (const segment of segments) {
+    const previous = groups.at(-1)
+    if (previous && segment.x - previous.right <= columnGap) {
+      previous.text += ` ${segment.text.trim()}`
+      previous.right = segment.x + segment.width
+    } else {
+      groups.push({ text: segment.text.trim(), x: segment.x, right: segment.x + segment.width })
+    }
+  }
+  return groups.map((group) => ({
+    text: group.text,
+    x: (group.x + group.right) / 2,
+    ...(line.y !== undefined ? { y: line.y } : {}),
+    ...(medianHeight > 0 ? { height: medianHeight } : {}),
+  }))
+}
+
+function adjacentCalendarDescription(lines: ExtractedLine[], index: number, x: number | undefined, year: number | undefined): string {
+  for (const neighborIndex of [index - 1, index + 1]) {
+    const neighbor = lines[neighborIndex]
+    if (!neighbor) continue
+    const candidates = groupCalendarLine(neighbor)
+      .filter((group) => group.text.length > 3 && findDateMatches(group.text, year).length === 0)
+      .filter((group) => x === undefined || group.x === undefined || Math.abs(group.x - x) <= 300)
+      .sort((a, b) => x === undefined || a.x === undefined || b.x === undefined
+        ? 0
+        : Math.abs(a.x - x) - Math.abs(b.x - x))
+    if (candidates[0]) return candidates[0].text
+  }
+  return ''
+}
+
+function makeCalendarItems(
+  pages: ExtractedPage[],
+  requestedType: Exclude<DocumentType, 'weekly_timetable' | 'unknown'>,
+  academicYear?: AcademicYearRange,
+): ExtractedReviewItem[] {
   const items: ExtractedReviewItem[] = []
+  let currentYear = academicYear?.startYear
+  let previousMonth: number | undefined
   for (const page of pages) {
     const lines = page.lines
+    const previousByColumn: Array<{ x: number; y?: number; height?: number; item: ExtractedReviewItem }> = []
     for (let index = 0; index < lines.length; index += 1) {
       const line = lines[index]!
-      const text = line.text.trim()
-      const dates = findDateMatches(text)
-      if (dates.length === 0) {
-        const previous = items.at(-1)
-        if (previous && previous.page === page.page && previous.title && text.length > 3 && !/^(page\s+\d+|continued)$/i.test(text)) {
-          previous.description = `${previous.description}${previous.description ? ' ' : ''}${text}`.slice(0, 1000)
+      for (const group of groupCalendarLine(line)) {
+        const text = group.text
+        const dates = findDateMatches(text, currentYear)
+        for (const date of dates) {
+          if (date.inferredYear && date.month !== undefined && currentYear !== undefined) {
+            if (previousMonth !== undefined && date.month < previousMonth && currentYear < (academicYear?.endYear ?? currentYear)) {
+              currentYear += 1
+            }
+            date.iso = validIsoDate(currentYear, date.month, Number(date.iso.slice(8, 10))) ?? date.iso
+            if (date.endIso) date.endIso = validIsoDate(currentYear, date.month, Number(date.endIso.slice(8, 10))) ?? date.endIso
+          } else if (!date.inferredYear) {
+            currentYear = Number(date.iso.slice(0, 4))
+          }
+          if (date.month !== undefined) previousMonth = date.month
         }
-        continue
-      }
+        if (dates.length === 0) {
+          const previous = group.x === undefined
+            ? items.at(-1)
+            : previousByColumn
+              .filter((candidate) => {
+                const verticalLimit = Math.max(40, (candidate.height ?? group.height ?? 0) * 3)
+                return Math.abs(candidate.x - group.x!) <= 300 &&
+                  (group.y === undefined || candidate.y === undefined || Math.abs(candidate.y - group.y) <= verticalLimit)
+              })
+              .sort((a, b) => Math.abs(a.x - group.x!) - Math.abs(b.x - group.x!))[0]?.item
+          if (previous && previous.page === page.page && previous.title && text.length > 3 && !/^(page\s+\d+|continued)$/i.test(text)) {
+            const priorDescription = previous.description
+            previous.description = `${priorDescription}${priorDescription ? ' ' : ''}${text}`.slice(0, 1000)
+            if (previous.title === priorDescription) previous.title = previous.description
+          }
+          continue
+        }
 
-      const startDate = dates[0]!.iso
-      const endDate = dates[0]!.endIso ?? (dates.length > 1 ? dates[1]!.iso : startDate)
-      const title = text.slice(0, dates[0]!.start).concat(' ', text.slice(dates.at(-1)!.end)).replace(/^[\s|:–—-]+|[\s|:–—-]+$/g, '').trim()
-
-      let description = title
-      if (!description && index > 0 && lines[index - 1]!.page === page.page && findDateMatches(lines[index - 1]!.text).length === 0) {
-        description = lines[index - 1]!.text.trim()
+        dates.forEach((date, dateIndex) => {
+          const precedingDate = dateIndex > 0 ? dates[dateIndex - 1] : undefined
+          const followingDate = dates[dateIndex + 1]
+          const before = text.slice(precedingDate?.end ?? 0, date.start).replace(/^[\s|:–—-]+|[\s|:–—-]+$/g, '').trim()
+          const after = text.slice(date.end, followingDate?.start ?? text.length).replace(/^[\s|:–—-]+|[\s|:–—-]+$/g, '').trim()
+          const description = after || before || adjacentCalendarDescription(lines, index, group.x, currentYear)
+          const startDate = date.iso
+          const endDate = date.endIso ?? startDate
+          const eventType = requestedType === 'holiday_list' ? 'holiday' : inferCalendarType(description)
+          const ambiguousDate = date.ambiguous
+          const inferredEventYear = Boolean(date.inferredYear)
+          const hasType = Boolean(eventType)
+          const validation: ReviewState = !description
+            ? 'invalid'
+            : ambiguousDate || inferredEventYear || !hasType
+              ? 'needs_review'
+              : page.source === 'ocr' && (page.ocrConfidence ?? 0) < 0.7
+                ? 'needs_review'
+                : 'high_confidence'
+          const warnings = [
+            ...(!description ? ['No event description was found'] : []),
+            ...(ambiguousDate ? ['Numeric date interpreted as DD/MM/YYYY; verify the date'] : []),
+            ...(inferredEventYear ? ['Year inferred from the academic-year heading; verify the date'] : []),
+            ...(!hasType ? ['Event type could not be identified from the description'] : []),
+            ...(page.source === 'ocr' && (page.ocrConfidence ?? 0) < 0.7 ? ['Low OCR confidence; verify the extracted text'] : []),
+          ]
+          const item: ExtractedReviewItem = {
+            id: createId(),
+            kind: 'event',
+            title: description || 'Unrecognized event',
+            description,
+            ...(eventType ? { eventType } : {}),
+            date: startDate,
+            startDate,
+            endDate,
+            page: page.page,
+            confidence: Math.min(page.source === 'ocr' ? page.ocrConfidence ?? 0.45 : 0.88, ambiguousDate || inferredEventYear || !hasType ? 0.58 : 0.96),
+            validation,
+            warnings,
+            subjectMatch: 'not_applicable',
+          }
+          items.push(item)
+          if (group.x !== undefined) previousByColumn.push({
+            x: group.x,
+            ...(group.y !== undefined ? { y: group.y } : {}),
+            ...(group.height !== undefined ? { height: group.height } : {}),
+            item,
+          })
+        })
       }
-      if (!description && lines[index + 1] && lines[index + 1]!.page === page.page && findDateMatches(lines[index + 1]!.text).length === 0) {
-        description = lines[index + 1]!.text.trim()
-        index += 1
-      }
-      const eventType = requestedType === 'holiday_list' ? 'holiday' : inferCalendarType(description)
-      const ambiguousDate = dates.some((date) => date.ambiguous)
-      const hasType = Boolean(eventType)
-      const validation: ReviewState = !description
-        ? 'invalid'
-        : ambiguousDate || !hasType
-          ? 'needs_review'
-          : page.source === 'ocr' && (page.ocrConfidence ?? 0) < 0.7
-            ? 'needs_review'
-            : 'high_confidence'
-      const warnings = [
-        ...(!description ? ['No event description was found'] : []),
-        ...(ambiguousDate ? ['Numeric date interpreted as DD/MM/YYYY; verify the date'] : []),
-        ...(!hasType ? ['Event type could not be identified from the description'] : []),
-        ...(page.source === 'ocr' && (page.ocrConfidence ?? 0) < 0.7 ? ['Low OCR confidence; verify the extracted text'] : []),
-      ]
-      items.push({
-        id: createId(),
-        kind: 'event',
-        title: description || 'Unrecognized event',
-        description,
-        ...(eventType ? { eventType } : {}),
-        date: startDate,
-        startDate,
-        endDate,
-        page: page.page,
-        confidence: Math.min(page.source === 'ocr' ? page.ocrConfidence ?? 0.45 : 0.88, ambiguousDate || !hasType ? 0.58 : 0.96),
-        validation,
-        warnings,
-        subjectMatch: 'not_applicable',
-      })
     }
   }
   return items
@@ -495,7 +834,11 @@ const DAY_PATTERN = /\b(sun(?:day)?|mon(?:day)?|tue(?:sday)?|wed(?:nesday)?|thu(
 const TIME_PATTERN = /(?<![\d/])(\d{1,2}(?::[0-5]\d|[.][0-5]\d)?\s*(?:a\.?m\.?|p\.?m\.?)?)(?![\d/])/gi
 
 function parseTime(value: string): string | undefined {
-  const match = /^\s*(\d{1,2})(?::|\.([0-5]\d))?([0-5]\d)?\s*(a\.?m\.?|p\.?m\.?)?\s*$/i.exec(value)
+  const compact = /^\s*(\d{3,4})\s*(a\.?m\.?|p\.?m\.?)?\s*$/i.exec(value)
+  const normalized = compact
+    ? `${compact[1]!.length === 3 ? compact[1]!.slice(0, 1) : compact[1]!.slice(0, 2)}:${compact[1]!.slice(-2)}${compact[2] ? ` ${compact[2]}` : ''}`
+    : value
+  const match = /^\s*(\d{1,2})(?::|\.([0-5]\d))?([0-5]\d)?\s*(a\.?m\.?|p\.?m\.?)?\s*$/i.exec(normalized)
   if (!match) return undefined
   const hourValue = Number(match[1])
   const minute = Number(match[2] ?? match[3] ?? 0)
@@ -508,8 +851,19 @@ function parseTime(value: string): string | undefined {
 }
 
 function parseTimeRange(text: string): { startTime: string; endTime: string; start: number; end: number } | undefined {
-  const rangePattern = /(\d{1,2}(?::[0-5]\d|[.][0-5]\d)?\s*(?:a\.?m\.?|p\.?m\.?)?)\s*(?:-|–|—|\bto\b)\s*(\d{1,2}(?::[0-5]\d|[.][0-5]\d)?\s*(?:a\.?m\.?|p\.?m\.?)?)/i
+  const rangePattern = /(?<!\d)(\d{1,2}(?::[0-5]\d|[.][0-5]\d)?\s*(?:a\.?m\.?|p\.?m\.?)?)\s*(?:-|–|—|\bto\b)\s*(\d{1,2}(?::[0-5]\d|[.][0-5]\d)?\s*(?:a\.?m\.?|p\.?m\.?)?)(?!\d)/i
   const match = rangePattern.exec(text)
+  const compactMatch = match ? undefined : /(?<!\d)(\d{3,4})\s*(?:[-–—]\s*)?(\d{3,4})(?!\d)/.exec(text)
+  if (!match && compactMatch) {
+    if (/^(?:19|20)\d{2}$/.test(compactMatch[1]!) && /^(?:19|20)\d{2}$/.test(compactMatch[2]!)) return undefined
+    const startTime = parseTime(compactMatch[1]!)
+    const endTime = parseTime(compactMatch[2]!)
+    if (startTime && endTime) {
+      const start = Number(startTime.slice(0, 2)) * 60 + Number(startTime.slice(3))
+      const end = Number(endTime.slice(0, 2)) * 60 + Number(endTime.slice(3))
+      if (end > start) return { startTime, endTime, start, end }
+    }
+  }
   if (!match) return undefined
   const leftHasMeridiem = /[ap]\.?m\.?/i.test(match[1]!)
   const rightHasMeridiem = /[ap]\.?m\.?/i.test(match[2]!)
@@ -548,6 +902,20 @@ function subjectMatch(title: string, subjects: Subject[]): { state: 'matched' | 
   if (exact.length > 1) return { state: 'ambiguous' }
 
   const tokens = (value: string) => new Set(normalizeForMatch(value).split(' ').filter((token) => token.length > 1))
+  const titleTokens = tokens(title)
+  const aliases = subjects.filter((subject) => {
+    const subjectTokens = tokens(`${subject.name} ${subject.code ?? ''}`)
+    if (titleTokens.size > 0 && [...titleTokens].every((token) => subjectTokens.has(token))) return true
+    if (titleTokens.size !== 1 || normalized.length < 2) return false
+    const abbreviation = [...normalizeForMatch(subject.name).split(' ')
+      .filter((token) => token.length > 1 && !['and', 'for', 'the', 'with'].includes(token))]
+      .map((token) => token[0])
+      .join('')
+    return abbreviation.startsWith(normalized)
+  })
+  if (aliases.length === 1) return { state: 'matched', subjectId: aliases[0]!.id }
+  if (aliases.length > 1) return { state: 'ambiguous' }
+
   const score = (a: string, b: string) => {
     const aa = tokens(a)
     const bb = tokens(b)
@@ -585,24 +953,151 @@ function inferLectureKind(text: string): 'lecture' | 'laboratory' | 'break' {
   return 'lecture'
 }
 
+function normalizeTimetableColumns<T extends {
+  range: NonNullable<ReturnType<typeof parseTimeRange>>
+  text: string
+}>(
+  columns: T[],
+): Array<T & { timeInferred: boolean }> {
+  let previousEnd = -1
+  return columns.map((column) => {
+    const { range } = column
+    let start = range.start
+    let end = range.end
+    let timeInferred = false
+    const explicitMeridiem = /[ap]\.?m\.?/i.test(column.text)
+    if (!explicitMeridiem && start >= 12 * 60 && end < 12 * 60) {
+      end += 12 * 60
+      timeInferred = true
+    } else if (!explicitMeridiem && end <= start && start < 12 * 60 && end < 12 * 60) {
+      end += 12 * 60
+      timeInferred = true
+    }
+    if (!explicitMeridiem && previousEnd >= 12 * 60 && start < 12 * 60) {
+      start += 12 * 60
+      end += 12 * 60
+      timeInferred = true
+    }
+    previousEnd = end
+    const format = (minutes: number) =>
+      `${String(Math.floor(minutes / 60) % 24).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`
+    return {
+      ...column,
+      range: { ...range, start, end, startTime: format(start), endTime: format(end) },
+      timeInferred,
+    }
+  })
+}
+
 function expandTimetableGrid(page: ExtractedPage): ExtractedPage {
   const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
-  const header = page.lines.find((line) => {
+  const timedSegments = page.lines.flatMap((line) =>
+    line.y === undefined
+      ? []
+      : (line.segments ?? []).flatMap((segment) => {
+        const range = parseTimeRange(segment.text)
+        return range ? [{ range, x: segment.x, y: line.y!, text: segment.text }] : []
+      }),
+  )
+  const timeHeader = timedSegments
+    .map((seed) => timedSegments.filter((candidate) => Math.abs(candidate.y - seed.y) <= 24))
+    .sort((a, b) => new Set(b.map((entry) => Math.round(entry.x / 30))).size - new Set(a.map((entry) => Math.round(entry.x / 30))).size)[0]
+  const separatedTimeColumns = normalizeTimetableColumns([...(timeHeader ?? [])]
+    .sort((a, b) => a.x - b.x)
+    .filter((entry, index, entries) => index === 0 || Math.abs(entry.x - entries[index - 1]!.x) >= 30))
+
+  if (separatedTimeColumns.length >= 2) {
+    const gaps = separatedTimeColumns.slice(1).map((column, index) => column.x - separatedTimeColumns[index]!.x).sort((a, b) => a - b)
+    const typicalGap = gaps[Math.floor(gaps.length / 2)]!
+    const generated: ExtractedLine[] = []
+    const consumed = new Set<ExtractedLine>()
+    for (const line of page.lines) {
+      if (line.y === undefined || line.y <= Math.max(...separatedTimeColumns.map((column) => column.y)) + 8 || !line.segments?.length) continue
+      const daySegment = line.segments.find((segment) => getWeekday(segment.text) !== undefined)
+      const weekday = daySegment ? getWeekday(daySegment.text) : undefined
+      if (weekday === undefined) continue
+
+      const heights = line.segments
+        .filter((segment) => !/^[|:;.,]+$/.test(segment.text.trim()))
+        .map((segment) => segment.height ?? 0)
+        .filter((height) => height > 0)
+        .sort((a, b) => a - b)
+      const wordGap = Math.max(8, (heights[Math.floor(heights.length / 2)] ?? 14) * 0.9)
+      const cells: ExtractedSegment[] = []
+      let group: ExtractedSegment | undefined
+      const flushGroup = () => {
+        if (group) cells.push(group)
+        group = undefined
+      }
+      for (const segment of [...line.segments].sort((a, b) => a.x - b.x)) {
+        if (segment === daySegment || parseTimeRange(segment.text)) continue
+        if (/^[|:;.,]+$/.test(segment.text.trim())) {
+          flushGroup()
+          continue
+        }
+        if (group && segment.x - (group.x + group.width) <= wordGap) {
+          group.text += ` ${segment.text}`
+          group.width = segment.x + segment.width - group.x
+          group.height = Math.max(group.height ?? 0, segment.height ?? 0)
+        } else {
+          flushGroup()
+          group = { ...segment }
+        }
+      }
+      flushGroup()
+
+      let added = false
+      for (const cell of cells) {
+        const firstColumn = separatedTimeColumns.reduce((best, column) =>
+          Math.abs(column.x - cell.x) < Math.abs(best.x - cell.x) ? column : best,
+        )
+        if (Math.abs(firstColumn.x - cell.x) > typicalGap * 0.65) continue
+        const firstIndex = separatedTimeColumns.indexOf(firstColumn)
+        const cellEnd = cell.x + Math.max(0, cell.width)
+        const lastColumn = [...separatedTimeColumns.slice(firstIndex)].reverse().find((column) => column.x < cellEnd) ?? firstColumn
+        const title = cleanSubjectTitle(cell.text)
+        if (normalizeForMatch(title).length < 2) continue
+        generated.push({
+          page: page.page,
+          text: `${dayNames[weekday]} ${firstColumn.range.startTime}-${lastColumn.range.endTime} ${title}`,
+          timeInferred: firstColumn.timeInferred || lastColumn.timeInferred,
+        })
+        added = true
+      }
+      if (added) consumed.add(line)
+    }
+
+    if (generated.length) {
+      return { ...page, lines: [...page.lines.filter((line) => !consumed.has(line)), ...generated] }
+    }
+  }
+
+  const isHeader = (line: ExtractedLine) => {
     if ((line.segments?.length ?? 0) < 3) return false
-    const dayCount = line.segments!.filter((segment) => getWeekday(segment.text) !== undefined).length
+    const dayCount = new Set(line.segments!.flatMap((segment) => {
+      const weekday = getWeekday(segment.text)
+      return weekday === undefined ? [] : [weekday]
+    })).size
     const timeCount = line.segments!.filter((segment) => parseTimeRange(segment.text)).length
     return dayCount >= 2 || timeCount >= 2
-  })
+  }
+  const header = page.lines.find((line) =>
+    isHeader(line) && line.segments!.filter((segment) => parseTimeRange(segment.text)).length >= 2,
+  ) ?? page.lines.find(isHeader)
   if (!header?.segments) return page
 
   const dayColumns = header.segments.flatMap((segment) => {
     const weekday = getWeekday(segment.text)
     return weekday === undefined ? [] : [{ weekday, x: segment.x }]
   })
-  const timeColumns = header.segments.flatMap((segment) => {
+  const timeColumns = normalizeTimetableColumns(header.segments.flatMap((segment) => {
     const range = parseTimeRange(segment.text)
-    return range ? [{ range, x: segment.x }] : []
-  })
+    return range ? [{ range, x: segment.x, text: segment.text }] : []
+  }))
+  const timeColumnGaps = timeColumns.slice(1).map((column, index) => column.x - timeColumns[index]!.x).sort((a, b) => a - b)
+  const typicalTimeColumnGap = timeColumnGaps.length
+    ? timeColumnGaps[Math.floor(timeColumnGaps.length / 2)]!
+    : 0
   if (dayColumns.length < 2 && timeColumns.length < 2) return page
 
   const generated: ExtractedLine[] = []
@@ -631,36 +1126,73 @@ function expandTimetableGrid(page: ExtractedPage): ExtractedPage {
       const daySegment = line.segments.find((segment) => getWeekday(segment.text) !== undefined)
       const weekday = daySegment ? getWeekday(daySegment.text) : undefined
       if (weekday === undefined) continue
-      const cells = line.segments.filter((segment) => segment !== daySegment && !parseTimeRange(segment.text))
+      const cells: ExtractedSegment[] = []
+      let group: ExtractedSegment | undefined
+      const heights = line.segments.map((segment) => segment.height ?? 0).filter((height) => height > 0).sort((a, b) => a - b)
+      const wordGap = Math.max(8, (heights[Math.floor(heights.length / 2)] ?? 14) * 0.9)
+      const flushGroup = () => {
+        if (group) cells.push(group)
+        group = undefined
+      }
+      for (const segment of [...line.segments].sort((a, b) => a.x - b.x)) {
+        if (segment === daySegment || parseTimeRange(segment.text)) continue
+        if (/^[|:;.,]+$/.test(segment.text.trim())) {
+          flushGroup()
+          continue
+        }
+        if (group && segment.x - (group.x + group.width) <= wordGap) {
+          group.text += ` ${segment.text}`
+          group.width = segment.x + segment.width - group.x
+          group.height = Math.max(group.height ?? 0, segment.height ?? 0)
+        } else {
+          flushGroup()
+          group = { ...segment }
+        }
+      }
+      flushGroup()
       const beforeCount = generated.length
       for (const cell of cells) {
-        const firstColumn = nearest(cell.x, timeColumns)
-        if (!firstColumn) continue
+        let firstColumn = nearest(cell.x, timeColumns)
+        if (!firstColumn || Math.abs(firstColumn.x - cell.x) > typicalTimeColumnGap * 0.65) continue
+        const nearestColumnIndex = timeColumns.indexOf(firstColumn)
+        const previousColumn = timeColumns[nearestColumnIndex - 1]
+        if (previousColumn && typicalTimeColumnGap > 0 &&
+          Math.abs(firstColumn.x - cell.x) > typicalTimeColumnGap * 0.35 &&
+          Math.abs(previousColumn.x - cell.x) > typicalTimeColumnGap * 0.35 &&
+          cell.width >= typicalTimeColumnGap * 0.45) {
+          firstColumn = previousColumn
+        }
+        const firstColumnIndex = timeColumns.indexOf(firstColumn)
         const cellEnd = cell.x + Math.max(0, cell.width)
-        const lastColumn = [...timeColumns].reverse().find((column) => column.x < cellEnd) ?? firstColumn
+        const lastColumn = [...timeColumns.slice(firstColumnIndex)].reverse().find((column) => column.x < cellEnd) ?? firstColumn
         const endTime = lastColumn.range.endTime
         const title = cleanSubjectTitle(cell.text)
-        if (!title) continue
-        generated.push({ page: page.page, text: `${dayNames[weekday]} ${firstColumn.range.startTime}-${endTime} ${title}` })
+        if (normalizeForMatch(title).length < 2) continue
+        generated.push({
+          page: page.page,
+          text: `${dayNames[weekday]} ${firstColumn.range.startTime}-${endTime} ${title}`,
+          timeInferred: firstColumn.timeInferred || lastColumn.timeInferred,
+        })
       }
       if (generated.length > beforeCount) consumed.add(line)
     }
   }
 
   return generated.length
-    ? { ...page, lines: [...page.lines.filter((line) => !consumed.has(line)), ...generated] }
+    ? { ...page, lines: [
+      ...page.lines.filter((line) => !consumed.has(line) && DAY_PATTERN.test(line.text) && parseTimeRange(line.text)),
+      ...generated,
+    ] }
     : page
 }
 
 function makeTimetableItems(pages: ExtractedPage[], subjects: Subject[], examination = false): ExtractedReviewItem[] {
   const items: ExtractedReviewItem[] = []
-  let currentDay: number | undefined
   for (const page of pages.map(expandTimetableGrid)) {
     for (const line of page.lines) {
       const text = line.text.trim()
       const weekday = getWeekday(text)
       const timeRange = parseTimeRange(text)
-      if (weekday !== undefined) currentDay = weekday
 
       if (examination) {
         const dates = findDateMatches(text)
@@ -681,16 +1213,12 @@ function makeTimetableItems(pages: ExtractedPage[], subjects: Subject[], examina
         continue
       }
 
-      const day = weekday ?? currentDay
-      if (day === undefined && !timeRange && !line.segments?.length) continue
+      const day = weekday
+      if (day === undefined) continue
       let title = ''
       let teacher = ''
       const room = extractRoom(text)
 
-      if (line.segments?.length && line.segments.length > 1 && day === undefined) {
-        const daySegment = line.segments.find((segment) => getWeekday(segment.text) !== undefined)
-        if (daySegment) currentDay = getWeekday(daySegment.text)
-      }
       const range = timeRange ?? (() => {
         const times = [...text.matchAll(TIME_PATTERN)].map((match) => parseTime(match[0])).filter((time): time is string => Boolean(time))
         TIME_PATTERN.lastIndex = 0
@@ -724,14 +1252,16 @@ function makeTimetableItems(pages: ExtractedPage[], subjects: Subject[], examina
         ...(!title ? ['Subject name could not be identified'] : []),
         ...(matched.state === 'ambiguous' ? ['Subject match is ambiguous; choose a subject'] : []),
         ...(matched.state === 'unrecognized' ? ['No existing subject matched; review the name'] : []),
+        ...(line.timeInferred ? ['Afternoon meridiem inferred from the timetable sequence; verify this time'] : []),
         ...(duplicate ? ['Duplicate timetable row detected'] : []),
         ...(overlap ? ['This row overlaps another extracted session'] : []),
         ...(page.source === 'ocr' && (page.ocrConfidence ?? 0) < 0.7 ? ['Low OCR confidence; verify the extracted text'] : []),
       ]
       const validation: ReviewState = duplicate ? 'duplicate'
         : !valid ? 'invalid'
+          : line.timeInferred ? 'needs_review'
           : matched.state !== 'matched' ? matched.state === 'ambiguous' ? 'needs_review' : 'unrecognized'
-            : overlap || (page.source === 'ocr' && (page.ocrConfidence ?? 0) < 0.7) ? 'needs_review'
+          : overlap || (page.source === 'ocr' && (page.ocrConfidence ?? 0) < 0.7) ? 'needs_review'
               : 'high_confidence'
 
       if (!title && !range && day === undefined) continue
@@ -782,10 +1312,13 @@ function classifyDocument(sourceText: string): DocumentType {
     holiday_list: (text.match(/\b(holiday list|public holidays|college holidays|holidays)\b/g) ?? []).length,
     academic_calendar: (text.match(/\b(academic calendar|semester calendar|academic year|registration|semester begins|semester ends)\b/g) ?? []).length,
   }
+  const monthNames = new Set(text.match(/\b(january|february|march|april|may|june|july|august|september|october|november|december)\b/g) ?? [])
+  const numberedCells = text.match(/\b\d{1,2}\b/g) ?? []
 
   if (counts.examination_timetable >= 1 && counts.examination_timetable >= counts.weekly_timetable) return 'examination_timetable'
   if (/\bholiday\s+list\b/i.test(text)) return 'holiday_list'
   if (/\bacademic\s+calendar\b/i.test(text)) return 'academic_calendar'
+  if (monthNames.size >= 6 && numberedCells.length >= 20) return 'academic_calendar'
   if (/\b(weekly\s+)?(class\s+)?time\s*table\b/i.test(text)) return 'weekly_timetable'
   if (counts.holiday_list >= 2 && counts.holiday_list >= counts.academic_calendar) return 'holiday_list'
   if (counts.academic_calendar >= 1 && counts.academic_calendar >= counts.weekly_timetable) return 'academic_calendar'
@@ -823,6 +1356,7 @@ export function buildImportReview(
     })
     .join('')
     .slice(0, MAX_SOURCE_TEXT_LENGTH)
+  const academicYear = findAcademicYear(safeText)
   const detectedDocumentType = classifyDocument(safeText)
   const normalizedRequestedType = requestedType === 'timetable' ? 'weekly_timetable' : requestedType
   const documentType = normalizedRequestedType === 'auto' ? detectedDocumentType : normalizedRequestedType
@@ -837,8 +1371,7 @@ export function buildImportReview(
       ? makeTimetableItems(safePages, subjects)
       : documentType === 'examination_timetable'
         ? makeTimetableItems(safePages, subjects, true)
-      : makeCalendarItems(safePages, calendarType)
-  const year = /\b(?:19|20)\d{2}\s*[/-]\s*(?:19|20)\d{2}\b/.exec(safeText)?.[0]
+      : makeCalendarItems(safePages, calendarType, academicYear)
   return {
     kind,
     documentType,
@@ -846,7 +1379,7 @@ export function buildImportReview(
     items,
     sourceText: safeText,
     pageCount: safePages.length,
-    ...(year ? { academicYear: year.replace(/\s+/g, '') } : {}),
+    ...(academicYear ? { academicYear: academicYear.label } : {}),
   }
 }
 

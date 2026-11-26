@@ -33,6 +33,92 @@ describe('backup and restore', () => {
     expect(validateBackupText(JSON.stringify(backup)).data.subjects).toHaveLength(1)
   })
 
+  it('backs up and restores semester results without replacing existing rows', async () => {
+    await db.studentSemesterResults.add({
+      id: 'semester-result-1',
+      semesterNumber: 1,
+      sgpa: 8.25,
+      totalCredits: 20,
+      status: 'completed',
+      academicYear: '2025-2026',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    })
+    const backup = await createFullBackup()
+    expect(backup.data.studentSemesterResults).toHaveLength(1)
+
+    await db.studentSemesterResults.clear()
+    await restoreBackup(validateBackupText(JSON.stringify(backup)))
+    expect((await db.studentSemesterResults.get('semester-result-1'))?.sgpa).toBe(8.25)
+  })
+
+  it('previews semester-number conflicts as duplicates without overwriting existing results', async () => {
+    await db.studentSemesterResults.add({
+      id: 'existing-result',
+      semesterNumber: 1,
+      sgpa: 7,
+      totalCredits: 18,
+      status: 'completed',
+      createdAt: '',
+      updatedAt: '',
+    })
+    const backup = await createFullBackup()
+    backup.data.studentSemesterResults = [{
+      id: 'conflicting-result',
+      semesterNumber: 1,
+      sgpa: 9,
+      totalCredits: 20,
+      status: 'completed',
+      createdAt: '',
+      updatedAt: '',
+    }]
+
+    expect(await previewRestore(backup)).toMatchObject({
+      additions: 0,
+      duplicateRows: 1,
+      byTable: { studentSemesterResults: { additions: 0, duplicates: 1 } },
+    })
+    await restoreBackup(backup)
+    expect(await db.studentSemesterResults.count()).toBe(1)
+    expect((await db.studentSemesterResults.get('existing-result'))?.sgpa).toBe(7)
+  })
+
+  it('handles repeated semester numbers inside an imported backup', async () => {
+    const backup = await createFullBackup()
+    backup.data.studentSemesterResults = [
+      { id: 'semester-one-a', semesterNumber: 1, sgpa: 8, totalCredits: 20, status: 'completed', createdAt: '', updatedAt: '' },
+      { id: 'semester-one-b', semesterNumber: 1, sgpa: 9, totalCredits: 20, status: 'completed', createdAt: '', updatedAt: '' },
+    ]
+
+    expect(await previewRestore(backup)).toMatchObject({
+      additions: 1,
+      duplicateRows: 1,
+      byTable: { studentSemesterResults: { additions: 1, duplicates: 1 } },
+    })
+    await restoreBackup(backup)
+    expect(await db.studentSemesterResults.count()).toBe(1)
+  })
+
+  it('accepts and restores older backups that do not contain the new results store', async () => {
+    const backup = await createFullBackup()
+    delete backup.data.studentSemesterResults
+
+    expect(() => validateBackupText(JSON.stringify(backup))).not.toThrow()
+    await expect(restoreBackup(backup)).resolves.toMatchObject({ additions: 0 })
+  })
+
+  it('rejects invalid semester result records in backup files', async () => {
+    const backup = await createFullBackup()
+    backup.data.studentSemesterResults = [{
+      id: 'invalid-semester-result',
+      semesterNumber: 9,
+      status: 'completed',
+      sgpa: 9,
+      totalCredits: 20,
+    }]
+    await expect(previewRestore(backup)).rejects.toThrow('semesterNumber')
+  })
+
   it('detects duplicate ids and restores without overwriting', async () => {
     await db.subjects.add({
       id: 'subject-1',

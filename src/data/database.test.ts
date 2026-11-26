@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
+import Dexie from 'dexie'
 import { StudentMateDatabase } from './database'
 import { requireDate, requireNonEmpty, requireRange } from './validation'
 import { archiveSubject, deleteSubject, saveSemester, saveSubject } from './academicRepositories'
@@ -19,11 +20,11 @@ afterEach(async () => {
 })
 
 describe('StudentMate database', () => {
-  it('creates all normalized stores in schema version 1', async () => {
+  it('creates all normalized stores in schema version 2', async () => {
     const database = testDatabase()
     await database.open()
 
-    expect(database.verno).toBe(1)
+    expect(database.verno).toBe(2)
     expect(database.tables.map((table) => table.name)).toEqual(expect.arrayContaining([
       'semesters',
       'subjects',
@@ -38,7 +39,64 @@ describe('StudentMate database', () => {
       'gradingScales',
       'appSettings',
       'importJobs',
+      'studentSemesterResults',
     ]))
+  })
+
+  it('upgrades a version 1 database without changing existing academic or attendance records', async () => {
+    const name = `StudentMateMigration-${crypto.randomUUID()}`
+    const legacy = new Dexie(name)
+    legacy.version(1).stores({
+      subjects: 'id, semesterId, code, kind, archived',
+      classSessions: 'id, date, timetableRuleId, subjectId, status',
+      attendanceRecords: 'id, sessionId, subjectId, status, recordedAt',
+      calendarEvents: 'id, type, startDate, endDate, recurring, subjectId',
+    })
+    await legacy.open()
+    await legacy.table('subjects').add({
+      id: 'existing-subject',
+      semesterId: 'existing-semester',
+      name: 'Preserved subject',
+      code: 'SAFE101',
+      facultyName: '',
+      credits: 3,
+      kind: 'theory',
+      attendanceTarget: 75,
+      color: '#4f46e5',
+      archived: false,
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    })
+    await legacy.table('classSessions').add({
+      id: 'existing-session',
+      date: '2026-02-01',
+      timetableRuleId: 'existing-rule',
+      subjectId: 'existing-subject',
+      status: 'conducted',
+      notes: '',
+      createdAt: '2026-02-01T00:00:00.000Z',
+      updatedAt: '2026-02-01T00:00:00.000Z',
+    })
+    await legacy.table('attendanceRecords').add({
+      id: 'existing-attendance',
+      sessionId: 'existing-session',
+      subjectId: 'existing-subject',
+      status: 'present',
+      recordedAt: '2026-02-01T00:00:00.000Z',
+      createdAt: '2026-02-01T00:00:00.000Z',
+      updatedAt: '2026-02-01T00:00:00.000Z',
+    })
+    await legacy.close()
+
+    const upgraded = new StudentMateDatabase(name)
+    databases.push(upgraded)
+    await upgraded.open()
+
+    expect(upgraded.verno).toBe(2)
+    expect((await upgraded.subjects.get('existing-subject'))?.name).toBe('Preserved subject')
+    expect((await upgraded.classSessions.get('existing-session'))?.status).toBe('conducted')
+    expect((await upgraded.attendanceRecords.get('existing-attendance'))?.status).toBe('present')
+    expect(await upgraded.studentSemesterResults.count()).toBe(0)
   })
 
   it('preserves subject archival and separate session records', async () => {

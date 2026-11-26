@@ -580,6 +580,42 @@ select option { background: var(--surface); color: var(--text); }
 .marks-grid strong { color: var(--text); font-size: 19px; font-weight: 620; }
 .marks-grid p { margin: 5px 0 0; color: var(--muted); font-size: 12px; }
 
+.academic-performance-page { display: grid; gap: 16px; }
+.academic-performance-page .page-heading, .academic-performance-page .editor-card { margin-bottom: 0; }
+.academic-performance-overview { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.academic-performance-overview article { display: grid; gap: 6px; padding: 18px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow-card); }
+.academic-performance-overview article > span, .academic-performance-widget-stats span { color: var(--muted); font-size: 13px; }
+.academic-performance-overview article strong { color: var(--text); font-size: 28px; font-weight: 620; }
+.academic-performance-overview article small { color: var(--muted); font-size: 12px; }
+.academic-performance-settings { max-width: 760px; }
+.academic-performance-note { margin: 15px 0 0; color: var(--muted); font-size: 13px; }
+.academic-performance-table-wrap { overflow-x: auto; }
+.academic-performance-table { width: 100%; min-width: 820px; border-collapse: collapse; }
+.academic-performance-table th, .academic-performance-table td { padding: 10px 8px; border-bottom: 1px solid var(--border); text-align: left; }
+.academic-performance-table th { color: var(--muted); font-size: 12px; font-weight: 550; }
+.academic-performance-table tbody th { color: var(--text); font-size: 13px; font-weight: 550; white-space: nowrap; }
+.academic-performance-table input:not([type="checkbox"]) { width: 100%; min-width: 90px; min-height: 38px; padding: 7px 9px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); }
+.academic-performance-completed { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; text-transform: capitalize; }
+.academic-performance-actions { display: flex; gap: 6px; }
+.academic-performance-actions .secondary-button { min-height: 36px; padding: 0 10px; }
+.academic-performance-chart-card { min-width: 0; padding: 18px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow-card); }
+.academic-performance-chart { width: 100%; height: 240px; }
+.academic-performance-empty { display: grid; min-height: 90px; place-items: center; color: var(--muted); font-size: 13px; text-align: center; }
+.academic-performance-tools { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.academic-performance-tools .editor-card { margin: 0; }
+.academic-performance-submit { margin-top: 16px; }
+.academic-performance-result { margin: 16px 0 0; color: var(--success); font-size: 14px; font-weight: 600; }
+.academic-performance-result.warning { color: var(--warning); }
+.academic-performance-progress { height: 7px; overflow: hidden; border-radius: 999px; background: var(--surface-subtle); }
+.academic-performance-progress span { display: block; max-width: 100%; height: 100%; border-radius: inherit; background: var(--primary); }
+.academic-performance-progress-label { margin: 5px 0 0; color: var(--muted); font-size: 12px; }
+.academic-performance-widget { margin-top: 14px; }
+.academic-performance-widget-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.academic-performance-widget-stats > div { display: grid; gap: 3px; }
+.academic-performance-widget-stats strong { color: var(--text); font-size: 20px; font-weight: 620; }
+.academic-performance-widget .academic-performance-progress { margin-top: 12px; }
+.academic-performance-widget .academic-performance-chart { height: 155px; margin-top: 8px; }
+
 /* Dashboard-specific layout shares the same semantic tokens as every route. */
 .premium-dashboard { --premium-radius: var(--radius-lg); max-width: 1440px; background: transparent; }
 .premium-welcome { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; margin: 2px 0 24px; }
@@ -716,6 +752,7 @@ select option { background: var(--surface); color: var(--text); }
   .summary-card { margin: 0; }
   .premium-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .premium-main-grid, .premium-bottom-grid { grid-template-columns: 1fr; }
+  .academic-performance-tools { grid-template-columns: 1fr; }
   .premium-side-column { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .premium-side-column .premium-panel:last-child { grid-column: 1 / -1; }
   .premium-progress-card { min-height: 280px; }
@@ -819,6 +856,11 @@ select option { background: var(--surface); color: var(--text); }
   .premium-empty-dashboard { grid-template-columns: 1fr; justify-items: start; min-height: 220px; padding: 20px; }
   .premium-skeleton-grid { grid-template-columns: repeat(2, 1fr); }
   .premium-skeleton-columns { grid-template-columns: 1fr; }
+  .academic-performance-overview { grid-template-columns: 1fr; }
+  .academic-performance-widget-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .academic-performance-chart { height: 190px; }
+  .academic-performance-widget .academic-performance-chart { height: 135px; }
+  .academic-performance-page .page-heading { margin-bottom: 0; }
 }
 
 @media (max-width: 380px) {

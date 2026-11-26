@@ -26,6 +26,7 @@ const tableNames = [
   'gradingScales',
   'appSettings',
   'importJobs',
+  'studentSemesterResults',
 ] as const
 
 export async function createFullBackup(): Promise<StudentMateBackup> {
@@ -108,6 +109,7 @@ const requiredFields: Record<(typeof tableNames)[number], readonly string[]> = {
   gradingScales: ['name', 'boundaries', 'passingPercentage'],
   appSettings: ['key', 'value'],
   importJobs: ['kind', 'fileName', 'status', 'sourceType', 'extractedData'],
+  studentSemesterResults: ['semesterNumber', 'status'],
 }
 
 function requireString(row: Record<string, unknown>, field: string, tableName: string): string {
@@ -201,6 +203,25 @@ function validateBackupRow(tableName: (typeof tableNames)[number], row: Record<s
     requireString(row, 'fileName', tableName)
     requireString(row, 'extractedData', tableName)
   }
+
+  if (tableName === 'studentSemesterResults') {
+    if (!Number.isInteger(row.semesterNumber) || Number(row.semesterNumber) < 1 || Number(row.semesterNumber) > 8) {
+      throw new Error('Invalid row in "studentSemesterResults": "semesterNumber" must be from 1 to 8')
+    }
+    if (!['pending', 'current', 'completed'].includes(String(row.status))) {
+      throw new Error('Invalid row in "studentSemesterResults": "status" is invalid')
+    }
+    if (row.sgpa !== undefined && (typeof row.sgpa !== 'number' || !Number.isFinite(row.sgpa) || row.sgpa < 0 || row.sgpa > 100)) {
+      throw new Error('Invalid row in "studentSemesterResults": "sgpa" is invalid')
+    }
+    if (row.totalCredits !== undefined && (typeof row.totalCredits !== 'number' || !Number.isFinite(row.totalCredits) || row.totalCredits <= 0 || row.totalCredits > 1000)) {
+      throw new Error('Invalid row in "studentSemesterResults": "totalCredits" is invalid')
+    }
+    if (row.academicYear !== undefined) requireString(row, 'academicYear', tableName)
+    if (row.status === 'completed' && (typeof row.sgpa !== 'number' || typeof row.totalCredits !== 'number')) {
+      throw new Error('Invalid row in "studentSemesterResults": completed results require SGPA and credits')
+    }
+  }
 }
 
 export async function previewRestore(backup: StudentMateBackup): Promise<RestorePreview> {
@@ -213,6 +234,7 @@ export async function previewRestore(backup: StudentMateBackup): Promise<Restore
     for (const tableName of tableNames) {
       const rows = backup.data[tableName] ?? []
       let tableDuplicates = 0
+      const seenSemesterNumbers = new Set<number>()
       for (const row of rows) {
         if (!row || typeof row !== 'object') throw new Error(`Invalid row in "${tableName}"`)
         const record = row as Record<string, unknown>
@@ -222,7 +244,15 @@ export async function previewRestore(backup: StudentMateBackup): Promise<Restore
           if (!(field in record)) throw new Error(`Invalid row in "${tableName}": missing "${field}"`)
         }
         validateBackupRow(tableName, record)
-        if (await db.table(tableName).get(id)) tableDuplicates += 1
+        let isDuplicate = Boolean(await db.table(tableName).get(id))
+        if (tableName === 'studentSemesterResults') {
+          const semesterNumber = Number(record.semesterNumber)
+          const sameSemester = await db.studentSemesterResults.where('semesterNumber').equals(semesterNumber).first()
+          isDuplicate ||= Boolean(sameSemester)
+          isDuplicate ||= seenSemesterNumbers.has(semesterNumber)
+          seenSemesterNumbers.add(semesterNumber)
+        }
+        if (isDuplicate) tableDuplicates += 1
       }
       const tableAdditions = rows.length - tableDuplicates
       byTable[tableName] = { additions: tableAdditions, duplicates: tableDuplicates }
@@ -240,7 +270,12 @@ export async function restoreBackup(backup: StudentMateBackup): Promise<RestoreP
     for (const tableName of tableNames) {
       for (const row of backup.data[tableName] ?? []) {
         const id = (row as { id: string }).id
-        if (!(await db.table(tableName).get(id))) await db.table(tableName).add(row)
+        if (await db.table(tableName).get(id)) continue
+        if (tableName === 'studentSemesterResults') {
+          const semesterNumber = (row as { semesterNumber: number }).semesterNumber
+          if (await db.studentSemesterResults.where('semesterNumber').equals(semesterNumber).first()) continue
+        }
+        await db.table(tableName).add(row)
       }
     }
   })

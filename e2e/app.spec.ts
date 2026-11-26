@@ -8,6 +8,27 @@ test('dashboard loads and navigation reaches settings', async ({ page }) => {
   await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible()
 })
 
+test('academic performance tracks completed semester results', async ({ page }) => {
+  await page.goto('/performance')
+  await page.getByLabel('Current semester').selectOption('3')
+  await expect(page.getByText('Semester history is ready.')).toBeVisible()
+
+  const firstSemester = page.locator('tbody tr').filter({ hasText: 'Semester 1' })
+  await firstSemester.getByLabel('Semester 1 SGPA').fill('8')
+  await firstSemester.getByLabel('Semester 1 credits').fill('20')
+  await firstSemester.getByLabel('Semester 1 completed').check()
+  await firstSemester.getByRole('button', { name: 'Save' }).click()
+  await expect(page.getByText('Semester 1 result saved.')).toBeVisible()
+
+  const secondSemester = page.locator('tbody tr').filter({ hasText: 'Semester 2' })
+  await secondSemester.getByLabel('Semester 2 SGPA').fill('6')
+  await secondSemester.getByLabel('Semester 2 credits').fill('20')
+  await secondSemester.getByLabel('Semester 2 completed').check()
+  await secondSemester.getByRole('button', { name: 'Save' }).click()
+  await expect(page.getByText('Semester 2 result saved.')).toBeVisible()
+  await expect(page.getByText('7.00', { exact: true })).toBeVisible()
+})
+
 test('manifest exposes install metadata and PNG icons', async ({ page, request }) => {
   await page.goto('/')
   const response = await request.get('/manifest.webmanifest')
@@ -53,7 +74,7 @@ test('core routes have no horizontal overflow at release screen sizes', async ({
   ]
   for (const viewport of sizes) {
     await page.setViewportSize(viewport)
-    for (const route of ['/', '/subjects', '/timetable', '/calendar', '/attendance', '/academics', '/import', '/analytics', '/backup', '/settings']) {
+    for (const route of ['/', '/subjects', '/timetable', '/calendar', '/attendance', '/academics', '/performance', '/import', '/analytics', '/backup', '/settings']) {
       await page.goto(route)
       await page.waitForTimeout(100)
       const overflow = await page.evaluate(() =>
@@ -69,7 +90,7 @@ test('mobile navigation keeps every route reachable', async ({ page }) => {
   await page.goto('/')
   const navigation = page.getByRole('navigation', { name: 'Mobile navigation' })
   await expect(navigation).toBeVisible()
-  for (const route of ['/subjects', '/timetable', '/calendar', '/attendance', '/academics', '/import', '/analytics', '/backup', '/settings']) {
+  for (const route of ['/subjects', '/timetable', '/calendar', '/attendance', '/academics', '/performance', '/import', '/analytics', '/backup', '/settings']) {
     await expect(navigation.locator(`a[href="${route}"]`)).toHaveCount(1)
   }
   await navigation.getByRole('link', { name: 'Attendance' }).click()

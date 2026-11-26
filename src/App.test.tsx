@@ -32,4 +32,18 @@ describe('App', () => {
     fireEvent(window, new Event('offline'))
     expect(screen.getByText(/Offline - local academic data/)).toBeInTheDocument()
   })
+
+  it('lets a student select a semester and opens the performance tracker', async () => {
+    render(
+      <MemoryRouter initialEntries={['/performance']}>
+        <App />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByRole('heading', { name: 'Academic performance' })).toBeInTheDocument()
+    const currentSemester = await screen.findByRole('combobox', { name: 'Current semester' })
+    fireEvent.change(currentSemester, { target: { value: '3' } })
+    expect(await screen.findByText('Semester history is ready.')).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: 'Semester results' })).toBeInTheDocument()
+  })
 })
