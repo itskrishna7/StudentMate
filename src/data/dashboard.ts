@@ -1,6 +1,7 @@
 import { db } from './database'
 import { calculateAttendanceSummary } from './attendance'
-import { calculateAssessmentPercentage, calculateCGPA, calculateSGPA, gradePointForPercentage } from './grades'
+import { calculateAssessmentPercentage, calculateCGPA, calculateSGPA, gradeForSubjectPercentage } from './grades'
+import { listSubjectMarkingSchemes } from './markingSchemes'
 import type { AttendanceRecord } from './models'
 
 export interface DashboardSubjectAttendance {
@@ -93,7 +94,7 @@ function dateKey(date: Date): string {
 }
 
 export async function loadDashboardData(now: Date = new Date()): Promise<DashboardData> {
-  const [semesters, subjects, sessions, records, timetableRules, events, assessments, marks, gradingScales] =
+  const [semesters, subjects, sessions, records, timetableRules, events, assessments, marks, gradingScales, markingSchemes] =
     await Promise.all([
       db.semesters.toArray(),
       db.subjects.toArray(),
@@ -104,6 +105,7 @@ export async function loadDashboardData(now: Date = new Date()): Promise<Dashboa
       db.assessments.toArray(),
       db.marks.toArray(),
       db.gradingScales.toArray(),
+      listSubjectMarkingSchemes(),
     ])
 
   const currentSemester = semesters.find((semester) => semester.isCurrent) ??
@@ -269,7 +271,7 @@ export async function loadDashboardData(now: Date = new Date()): Promise<Dashboa
     return {
       subjectId: subject.id,
       subjectName: subject.name,
-      percentage: calculateAssessmentPercentage(subjectAssessments, subjectMarks),
+      percentage: calculateAssessmentPercentage(subjectAssessments, subjectMarks, markingSchemes[subject.id]),
       enteredAssessments: subjectAssessments.filter((assessment) =>
         subjectMarks.some((mark) => mark.assessmentId === assessment.id),
       ).length,
@@ -284,9 +286,12 @@ export async function loadDashboardData(now: Date = new Date()): Promise<Dashboa
       const subjectAssessments = assessments.filter((assessment) => assessment.subjectId === subject.id)
       const subjectMarks = marks.filter((mark) => mark.subjectId === subject.id)
       if (!subjectAssessments.length || !subjectMarks.length) return null
-      const percentage = calculateAssessmentPercentage(subjectAssessments, subjectMarks)
-      const gradePoint = defaultScale
-        ? gradePointForPercentage(percentage, defaultScale.boundaries)?.gradePoint
+      const scheme = markingSchemes[subject.id]
+      const percentage = calculateAssessmentPercentage(subjectAssessments, subjectMarks, scheme)
+      const gradePoint = scheme?.boundaries.length
+        ? gradeForSubjectPercentage(percentage, scheme.boundaries, scheme)?.gradePoint
+        : defaultScale
+          ? gradeForSubjectPercentage(percentage, defaultScale.boundaries, scheme)?.gradePoint
         : undefined
       return gradePoint === undefined
         ? null
@@ -306,9 +311,12 @@ export async function loadDashboardData(now: Date = new Date()): Promise<Dashboa
         const subjectAssessments = assessments.filter((assessment) => assessment.subjectId === subject.id)
         const subjectMarks = marks.filter((mark) => mark.subjectId === subject.id)
         if (!subjectAssessments.length || !subjectMarks.length) return null
-        const percentage = calculateAssessmentPercentage(subjectAssessments, subjectMarks)
-        const gradePoint = defaultScale
-          ? gradePointForPercentage(percentage, defaultScale.boundaries)?.gradePoint
+        const scheme = markingSchemes[subject.id]
+        const percentage = calculateAssessmentPercentage(subjectAssessments, subjectMarks, scheme)
+        const gradePoint = scheme?.boundaries.length
+          ? gradeForSubjectPercentage(percentage, scheme.boundaries, scheme)?.gradePoint
+          : defaultScale
+            ? gradeForSubjectPercentage(percentage, defaultScale.boundaries, scheme)?.gradePoint
           : undefined
         return gradePoint === undefined ? null : { credits: subject.credits, gradePoint }
       }).filter((entry): entry is { credits: number; gradePoint: number } => entry !== null)

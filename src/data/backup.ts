@@ -1,4 +1,5 @@
 import { db } from './database'
+import { validateSubjectMarkingSchemeJson } from './markingSchemes'
 
 export const BACKUP_FORMAT = 'studentmate'
 export const BACKUP_VERSION = 1
@@ -171,12 +172,14 @@ function validateBackupRow(tableName: (typeof tableNames)[number], row: Record<s
   if (tableName === 'assessments') {
     requireString(row, 'subjectId', tableName)
     requireString(row, 'name', tableName)
-    if (typeof row.maxMarks !== 'number' || !Number.isFinite(row.maxMarks) || row.maxMarks <= 0 || row.maxMarks > 100000) {
+    if (typeof row.maxMarks !== 'number' || !Number.isFinite(row.maxMarks) || row.maxMarks <= 0 || row.maxMarks > Number.MAX_SAFE_INTEGER) {
       throw new Error('Invalid row in "assessments": "maxMarks" is out of range')
     }
-    if (typeof row.weight !== 'number' || !Number.isFinite(row.weight) || row.weight < 0 || row.weight > 100) {
+    if (typeof row.weight !== 'number' || !Number.isFinite(row.weight) || row.weight < 0 || row.weight > Number.MAX_SAFE_INTEGER) {
       throw new Error('Invalid row in "assessments": "weight" is out of range')
     }
+    if (row.category !== undefined) requireString(row, 'category', tableName)
+    if (row.date !== undefined) requireString(row, 'date', tableName)
   }
 
   if (tableName === 'marks') {
@@ -197,6 +200,9 @@ function validateBackupRow(tableName: (typeof tableNames)[number], row: Record<s
   if (tableName === 'appSettings') {
     requireString(row, 'key', tableName)
     requireString(row, 'value', tableName)
+    if (String(row.key).startsWith('markingScheme.subject.')) {
+      validateSubjectMarkingSchemeJson(String(row.value))
+    }
   }
 
   if (tableName === 'importJobs') {
@@ -245,6 +251,10 @@ export async function previewRestore(backup: StudentMateBackup): Promise<Restore
         }
         validateBackupRow(tableName, record)
         let isDuplicate = Boolean(await db.table(tableName).get(id))
+        if (tableName === 'appSettings') {
+          const sameKey = await db.appSettings.where('key').equals(String(record.key)).first()
+          isDuplicate ||= Boolean(sameKey)
+        }
         if (tableName === 'studentSemesterResults') {
           const semesterNumber = Number(record.semesterNumber)
           const sameSemester = await db.studentSemesterResults.where('semesterNumber').equals(semesterNumber).first()
@@ -271,6 +281,10 @@ export async function restoreBackup(backup: StudentMateBackup): Promise<RestoreP
       for (const row of backup.data[tableName] ?? []) {
         const id = (row as { id: string }).id
         if (await db.table(tableName).get(id)) continue
+        if (tableName === 'appSettings') {
+          const key = (row as { key: string }).key
+          if (await db.appSettings.where('key').equals(key).first()) continue
+        }
         if (tableName === 'studentSemesterResults') {
           const semesterNumber = (row as { semesterNumber: number }).semesterNumber
           if (await db.studentSemesterResults.where('semesterNumber').equals(semesterNumber).first()) continue

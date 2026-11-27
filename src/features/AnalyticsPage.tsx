@@ -6,9 +6,10 @@ import { calculateAttendanceSummary } from '../data/attendance'
 import { listAttendanceRecords, listSessions } from '../data/attendanceRepository'
 import { calculateAssessmentPercentage } from '../data/grades'
 import { listAssessments, listMarks } from '../data/academicsRepository'
+import { listSubjectMarkingSchemes } from '../data/markingSchemes'
 import { listSemesters } from '../data/academicRepositories'
 import { exportAttendanceCsv, exportSemesterCsv } from '../data/reports'
-import type { Assessment, AttendanceRecord, ClassSession, Mark, Semester, Subject } from '../data/models'
+import type { Assessment, AttendanceRecord, ClassSession, Mark, Semester, Subject, SubjectMarkingScheme } from '../data/models'
 
 export default function AnalyticsPage() {
   const [subjects, setSubjects] = useState<Subject[]>([])
@@ -17,6 +18,7 @@ export default function AnalyticsPage() {
   const [assessments, setAssessments] = useState<Assessment[]>([])
   const [marks, setMarks] = useState<Mark[]>([])
   const [semesters, setSemesters] = useState<Semester[]>([])
+  const [markingSchemes, setMarkingSchemes] = useState<Record<string, SubjectMarkingScheme>>({})
   const [error, setError] = useState('')
 
   useEffect(() => {
@@ -28,7 +30,8 @@ export default function AnalyticsPage() {
       listAssessments(),
       listMarks(),
       listSemesters(),
-    ]).then(([subjectRows, sessionRows, recordRows, assessmentRows, markRows, semesterRows]) => {
+      listSubjectMarkingSchemes(),
+    ]).then(([subjectRows, sessionRows, recordRows, assessmentRows, markRows, semesterRows, schemeRows]) => {
       if (active) {
         setSubjects(subjectRows)
         setSessions(sessionRows)
@@ -36,6 +39,7 @@ export default function AnalyticsPage() {
         setAssessments(assessmentRows)
         setMarks(markRows)
         setSemesters(semesterRows)
+        setMarkingSchemes(schemeRows)
       }
     }).catch((cause) => {
       if (active) setError(cause instanceof Error ? cause.message : 'Could not load analytics')
@@ -56,6 +60,7 @@ export default function AnalyticsPage() {
     percentage: calculateAssessmentPercentage(
       assessments.filter((assessment) => assessment.subjectId === subject.id),
       marks.filter((mark) => mark.subjectId === subject.id),
+      markingSchemes[subject.id],
     ),
     color: subject.color,
   }))
@@ -75,7 +80,7 @@ export default function AnalyticsPage() {
         <div><p className="eyebrow">Academic insights</p><h1>Analytics</h1></div>
         <div className="heading-actions">
           <button className="secondary-button" type="button" onClick={() => exportAttendanceCsv(subjects, sessions, records)}>Attendance CSV</button>
-          <button className="primary-button" type="button" onClick={() => exportSemesterCsv(semesters, subjects, assessments, marks)}>Semester report</button>
+          <button className="primary-button" type="button" onClick={() => exportSemesterCsv(semesters, subjects, assessments, marks, markingSchemes)}>Semester report</button>
         </div>
       </div>
       {error && <div className="error-banner" role="alert">{error}</div>}

@@ -1,6 +1,6 @@
 import { calculateAssessmentPercentage } from './grades'
 import { calculateAttendanceSummary } from './attendance'
-import type { Assessment, AttendanceRecord, ClassSession, Mark, Semester, Subject } from './models'
+import type { Assessment, AttendanceRecord, ClassSession, Mark, Semester, Subject, SubjectMarkingScheme } from './models'
 
 export function neutralizeCsvFormula(value: string | number): string {
   const cleaned = Array.from(String(value))
@@ -70,6 +70,7 @@ export function exportSemesterCsv(
   subjects: Subject[],
   assessments: Assessment[],
   marks: Mark[],
+  markingSchemes: Record<string, SubjectMarkingScheme> = {},
 ) {
   const rows = semesters.flatMap((semester) =>
     subjects.filter((subject) => subject.semesterId === semester.id).map((subject) => {
@@ -80,7 +81,7 @@ export function exportSemesterCsv(
         subject.code,
         subject.name,
         subject.credits,
-        calculateAssessmentPercentage(subjectAssessments, subjectMarks).toFixed(2),
+        calculateAssessmentPercentage(subjectAssessments, subjectMarks, markingSchemes[subject.id]).toFixed(2),
       ]
     }),
   )

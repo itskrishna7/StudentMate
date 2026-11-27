@@ -6,11 +6,12 @@ import { checkDatabaseHealth } from './data/health'
 import type { CalendarEvent, Semester, Subject, TimetableRule } from './data/models'
 import { archiveSubject, deleteSubject, listSemesters, listSubjects, saveSemester, saveSubject } from './data/academicRepositories'
 import { cancelTimetableRule, listAllTimetableRules, listCalendarEvents, saveCalendarEvent, saveTimetableRule } from './data/timetableCalendar'
-import type { Assessment, AttendanceStatus, AttendanceRecord, ClassSession, GradingScale, Mark } from './data/models'
+import type { Assessment, AttendanceStatus, AttendanceRecord, ClassSession, GradingScale, Mark, SubjectMarkingScheme } from './data/models'
 import { listAttendanceRecords, listSessions, markAttendance, markDayAsHoliday, saveClassSession, setSessionStatus } from './data/attendanceRepository'
 import { calculateAttendanceSummary } from './data/attendance'
-import { calculateAssessmentPercentage, calculateCGPA, calculateSGPA, gradePointForPercentage, requiredMarks } from './data/grades'
-import { listAssessments, listMarks, saveAssessment, saveMark, saveGradingScale, listGradingScales } from './data/academicsRepository'
+import { calculateAssessmentPercentage, calculateCGPA, calculateSGPA, gradeForSubjectPercentage, requiredMarks } from './data/grades'
+import { deleteAssessment, deleteMark, listAssessments, listMarks, saveAssessment, saveMark, saveGradingScale, listGradingScales } from './data/academicsRepository'
+import { listSubjectMarkingSchemes, saveSubjectMarkingScheme } from './data/markingSchemes'
 import { buildImportReview, extractDocument, findSubjectMatch, reviewStateForItem, saveImportJob, validateImportFile, type DocumentExtraction, type DocumentType, type ExtractedReviewItem, type ExtractionProgress, type ImportReview, type ReviewState } from './data/importProcessing'
 import { createFullBackup, downloadJsonBackup, previewRestore, restoreBackup, validateBackupText, type RestorePreview, type StudentMateBackup } from './data/backup'
 import { loadDashboardData, type DashboardData } from './data/dashboard'
@@ -614,33 +615,41 @@ function SemesterEditor({ record, onCancel, onSave }: { record: Semester | null;
 }
 
 function AcademicsPage() {
+  const { confirm } = useConfirmDialog()
   const [subjects, setSubjects] = useState<Subject[]>([])
   const [semesters, setSemesters] = useState<Semester[]>([])
   const [assessments, setAssessments] = useState<Assessment[]>([])
   const [marks, setMarks] = useState<Mark[]>([])
   const [scales, setScales] = useState<GradingScale[]>([])
+  const [markingSchemes, setMarkingSchemes] = useState<Record<string, SubjectMarkingScheme>>({})
   const [selectedSubject, setSelectedSubject] = useState('')
   const [assessmentEditor, setAssessmentEditor] = useState(false)
+  const [assessmentEditorId, setAssessmentEditorId] = useState<string | undefined>()
   const [scaleEditor, setScaleEditor] = useState(false)
+  const [schemeEditor, setSchemeEditor] = useState(false)
   const [error, setError] = useState('')
   const [name, setName] = useState('')
   const [assessmentType, setAssessmentType] = useState<Assessment['type']>('assignment')
-  const [maxMarks, setMaxMarks] = useState(100)
-  const [weight, setWeight] = useState(20)
+  const [category, setCategory] = useState('')
+  const [maxMarks, setMaxMarks] = useState('')
+  const [weight, setWeight] = useState('')
+  const [assessmentDate, setAssessmentDate] = useState('')
 
   const refresh = async () => {
-    const [subjectRows, semesterRows, assessmentRows, markRows, scaleRows] = await Promise.all([
+    const [subjectRows, semesterRows, assessmentRows, markRows, scaleRows, schemeRows] = await Promise.all([
       listSubjects(false),
       listSemesters(),
       listAssessments(),
       listMarks(),
       listGradingScales(),
+      listSubjectMarkingSchemes(),
     ])
     setSubjects(subjectRows)
     setSemesters(semesterRows)
     setAssessments(assessmentRows)
     setMarks(markRows)
     setScales(scaleRows)
+    setMarkingSchemes(schemeRows)
   }
   useEffect(() => { refresh().catch((cause) => setError(cause instanceof Error ? cause.message : 'Could not load academics')) }, [])
 
@@ -648,27 +657,99 @@ function AcademicsPage() {
     setError('')
     try {
       if (!selectedSubject) throw new Error('Select a subject')
-      await saveAssessment({ subjectId: selectedSubject, name, type: assessmentType, maxMarks, weight })
+      if (!maxMarks) throw new Error('Enter maximum marks')
+      const scheme = markingSchemes[selectedSubject]
+      if ((!scheme || scheme.calculationMethod === 'weighted') && !weight.trim()) {
+        throw new Error('Enter an assessment weight for weighted calculation')
+      }
+      await saveAssessment({
+        subjectId: selectedSubject,
+        name,
+        type: assessmentType,
+        category: category.trim(),
+        maxMarks: Number(maxMarks),
+        weight: weight ? Number(weight) : 0,
+        date: assessmentDate,
+      }, assessmentEditorId)
       setName('')
+      setCategory('')
+      setMaxMarks('')
+      setWeight('')
+      setAssessmentDate('')
+      setAssessmentEditorId(undefined)
       setAssessmentEditor(false)
       await refresh()
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not save assessment') }
   }
 
+  const startAssessmentEditor = (assessment?: Assessment) => {
+    setAssessmentEditorId(assessment?.id)
+    if (assessment) {
+      setSelectedSubject(assessment.subjectId)
+      setName(assessment.name)
+      setAssessmentType(assessment.type)
+      setCategory(assessment.category ?? '')
+      setMaxMarks(String(assessment.maxMarks))
+      setWeight(String(assessment.weight))
+      setAssessmentDate(assessment.date ?? '')
+    } else {
+      setName('')
+      setAssessmentType('assignment')
+      setCategory('')
+      setMaxMarks('')
+      setWeight('')
+      setAssessmentDate('')
+    }
+    setAssessmentEditor(true)
+  }
+
+  const removeAssessment = async (assessment: Assessment) => {
+    if (!(await confirm({
+      title: 'Delete this assessment?',
+      description: `"${assessment.name}" and its entered mark will be deleted.`,
+      confirmLabel: 'Delete assessment',
+      variant: 'danger',
+    }))) return
+    try {
+      await deleteAssessment(assessment.id)
+      await refresh()
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Could not delete assessment')
+    }
+  }
+
   const subjectAssessments = assessments.filter((assessment) => assessment.subjectId === selectedSubject)
   const subjectMarks = marks.filter((mark) => mark.subjectId === selectedSubject)
-  const percentage = calculateAssessmentPercentage(subjectAssessments, subjectMarks)
-  const requiredAtTarget = requiredMarks(percentage, 40, 100 - subjectAssessments.reduce((sum, item) => sum + (marks.some((mark) => mark.assessmentId === item.id) ? item.weight : 0), 0))
-
+  const selectedScheme = markingSchemes[selectedSubject]
+  const percentage = calculateAssessmentPercentage(subjectAssessments, subjectMarks, selectedScheme)
+  const configuredMaximum = selectedScheme
+    ? (selectedScheme.internalMaxMarks ?? 0) +
+      (selectedScheme.externalMaxMarks ?? 0) +
+      (selectedScheme.practicalMaxMarks ?? 0)
+    : 0
   const defaultScale = scales.find((scale) => scale.isDefault) ?? scales[0]
-  const sgpaEntries = subjects.map((subject) => {
+  const passingPercentage = selectedScheme?.passingPercentage ?? defaultScale?.passingPercentage
+  const totalAssessmentWeight = subjectAssessments.reduce((sum, item) => sum + item.weight, 0)
+  const remainingAssessmentWeight = subjectAssessments.reduce((sum, item) =>
+    sum + (subjectMarks.some((mark) => mark.assessmentId === item.id) ? 0 : item.weight), 0)
+  const supportsRequiredMarks = !selectedScheme ||
+    (selectedScheme.calculationMethod === 'weighted' && selectedScheme.internalWeightage === undefined)
+  const requiredAtTarget = passingPercentage === undefined || !supportsRequiredMarks || totalAssessmentWeight === 0
+    ? null
+    : requiredMarks(percentage, passingPercentage, (remainingAssessmentWeight / totalAssessmentWeight) * 100)
+
+  const sgpaEntries = subjects.flatMap((subject) => {
     const subjectAssessments = assessments.filter((assessment) => assessment.subjectId === subject.id)
     const subjectMarks = marks.filter((mark) => mark.subjectId === subject.id)
-    const subjectPercentage = calculateAssessmentPercentage(subjectAssessments, subjectMarks)
-    const gradePoint = defaultScale
-      ? gradePointForPercentage(subjectPercentage, defaultScale.boundaries)?.gradePoint ?? 0
-      : 0
-    return { credits: subject.credits, gradePoint }
+    if (!subjectMarks.length) return []
+    const scheme = markingSchemes[subject.id]
+    const subjectPercentage = calculateAssessmentPercentage(subjectAssessments, subjectMarks, scheme)
+    const gradePoint = gradeForSubjectPercentage(
+      subjectPercentage,
+      scheme?.boundaries ?? defaultScale?.boundaries ?? [],
+      scheme,
+    )?.gradePoint
+    return gradePoint === undefined ? [] : [{ credits: subject.credits, gradePoint }]
   })
   const sgpa = calculateSGPA(sgpaEntries)
   const cgpa = calculateCGPA(semesters.map((semester) => ({
@@ -682,30 +763,72 @@ function AcademicsPage() {
         <div><p className="eyebrow">Marks and grades</p><h1>Academics</h1></div>
         <div className="heading-actions">
           <button className="secondary-button" type="button" onClick={() => setScaleEditor(true)}><Calculator size={17} /> Grading scale</button>
-          <button className="primary-button" type="button" onClick={() => setAssessmentEditor(true)}><Plus size={17} /> Assessment</button>
+          <button className="primary-button" type="button" onClick={() => startAssessmentEditor()}><Plus size={17} /> Assessment</button>
         </div>
       </div>
       {error && <div className="error-banner" role="alert">{error}</div>}
 
       {assessmentEditor && (
         <div className="editor-card">
-          <h2>Add assessment</h2>
+          <h2>{assessmentEditorId ? 'Edit assessment' : 'Add assessment'}</h2>
           <div className="form-grid">
-            <label>Subject<select value={selectedSubject} onChange={(event) => setSelectedSubject(event.target.value)}><option value="">Select subject</option>{subjects.map((subject) => <option key={subject.id} value={subject.id}>{subject.name}</option>)}</select></label>
+            <label>Subject<select disabled={Boolean(assessmentEditorId)} value={selectedSubject} onChange={(event) => setSelectedSubject(event.target.value)}><option value="">Select subject</option>{subjects.map((subject) => <option key={subject.id} value={subject.id}>{subject.name}</option>)}</select></label>
             <label>Name<input value={name} onChange={(event) => setName(event.target.value)} /></label>
             <label>Type<select value={assessmentType} onChange={(event) => setAssessmentType(event.target.value as Assessment['type'])}><option value="assignment">Assignment</option><option value="quiz">Quiz</option><option value="mid_semester">Mid-semester</option><option value="practical">Practical</option><option value="other">Other</option></select></label>
-            <label>Maximum marks<input type="number" min="0.01" value={maxMarks} onChange={(event) => setMaxMarks(Number(event.target.value))} /></label>
-            <label>Weight (%)<input type="number" min="0" max="100" value={weight} onChange={(event) => setWeight(Number(event.target.value))} /></label>
+            <label>Category<input value={category} onChange={(event) => setCategory(event.target.value)} placeholder="internal, external, practical, or custom" /></label>
+            <label>Maximum marks<input required type="number" min="0.01" step="any" value={maxMarks} onChange={(event) => setMaxMarks(event.target.value)} /></label>
+            <label>Assessment weight<input required={!markingSchemes[selectedSubject] || markingSchemes[selectedSubject]?.calculationMethod === 'weighted'} type="number" min="0" step="any" value={weight} onChange={(event) => setWeight(event.target.value)} placeholder="Only used by weighted rules" /></label>
+            <label>Date (optional)<input type="date" value={assessmentDate} onChange={(event) => setAssessmentDate(event.target.value)} /></label>
           </div>
-          <div className="form-actions"><button className="secondary-button" type="button" onClick={() => setAssessmentEditor(false)}>Cancel</button><button className="primary-button" type="button" onClick={saveAssessmentAndRefresh}>Save assessment</button></div>
+          <div className="form-actions"><button className="secondary-button" type="button" onClick={() => { setAssessmentEditor(false); setAssessmentEditorId(undefined) }}>Cancel</button><button className="primary-button" type="button" onClick={saveAssessmentAndRefresh}>Save assessment</button></div>
         </div>
       )}
 
-      {scaleEditor && <GradingScaleEditor onCancel={() => setScaleEditor(false)} onSave={async (scale) => { await saveGradingScale(scale); setScaleEditor(false); await refresh() }} />}
+      {scaleEditor && <GradingScaleEditor
+        initialScale={defaultScale}
+        onCancel={() => setScaleEditor(false)}
+        onSave={async (scale, id) => {
+          try {
+            await saveGradingScale(scale, id)
+            setScaleEditor(false)
+            await refresh()
+          } catch (cause) {
+            setError(cause instanceof Error ? cause.message : 'Could not save grading scale')
+          }
+        }}
+      />}
 
       <label className="subject-selector">Subject
         <select value={selectedSubject} onChange={(event) => setSelectedSubject(event.target.value)}><option value="">Select subject</option>{subjects.map((subject) => <option key={subject.id} value={subject.id}>{subject.name}</option>)}</select>
       </label>
+      {selectedSubject && (
+        <div className="section-heading">
+          <div><h2>Subject marking scheme</h2><p>Configure this subject independently; settings stay in this browser’s local database.</p></div>
+          <button className="secondary-button" type="button" onClick={() => setSchemeEditor(true)}>Configure scheme</button>
+        </div>
+      )}
+      {schemeEditor && selectedSubject && (
+        <SubjectMarkingSchemeEditor
+          initialScheme={selectedScheme}
+          fallbackScale={defaultScale}
+          onCancel={() => setSchemeEditor(false)}
+          onSave={async (scheme) => {
+            try {
+              await saveSubjectMarkingScheme(selectedSubject, scheme)
+              setSchemeEditor(false)
+              await refresh()
+            } catch (cause) {
+              setError(cause instanceof Error ? cause.message : 'Could not save subject marking scheme')
+            }
+          }}
+        />
+      )}
+      {selectedScheme && (
+        <p className="muted-state">
+          Configured maxima — internal: {selectedScheme.internalMaxMarks ?? 'not set'}, external: {selectedScheme.externalMaxMarks ?? 'not set'}, practical: {selectedScheme.practicalMaxMarks ?? 'not set'}.
+          Passing marks: {selectedScheme.passingMarks ?? 'not set'}; passing percentage: {selectedScheme.passingPercentage}%.
+        </p>
+      )}
 
       {selectedSubject ? (
         <>
@@ -713,7 +836,15 @@ function AcademicsPage() {
             <article><p>Assessment percentage</p><strong>{percentage.toFixed(2)}%</strong></article>
             <article><p>SGPA</p><strong>{sgpa.toFixed(2)}</strong></article>
             <article><p>CGPA</p><strong>{cgpa.toFixed(2)}</strong></article>
-            <article><p>Marks needed for 40%</p><strong>{requiredAtTarget.toFixed(1)}</strong></article>
+            {selectedScheme?.passingMarks !== undefined && configuredMaximum > 0 && subjectMarks.length > 0 && (
+              <article>
+                <p>Marks against configured scheme</p>
+                <strong>{(percentage * configuredMaximum / 100).toFixed(selectedScheme.decimalPrecision)} / {configuredMaximum}</strong>
+                <span>{percentage * configuredMaximum / 100 >= selectedScheme.passingMarks ? 'Pass mark met' : `Below ${selectedScheme.passingMarks} pass marks`}</span>
+              </article>
+            )}
+            {requiredAtTarget !== null && (!selectedScheme || selectedScheme.calculationMethod === 'weighted') &&
+              <article><p>Marks needed for {passingPercentage}%</p><strong>{requiredAtTarget.toFixed(1)}</strong></article>}
           </div>
 
           <div className="assessment-list">
@@ -721,7 +852,11 @@ function AcademicsPage() {
               const mark = subjectMarks.find((item) => item.assessmentId === assessment.id)
               return (
                 <article className="assessment-card" key={assessment.id}>
-                  <div><h3>{assessment.name}</h3><p>{assessment.type.replace('_', ' ')} - {assessment.weight}% weight</p></div>
+                  <div><h3>{assessment.name}</h3><p>{assessment.category || assessment.type.replace('_', ' ')}{assessment.date ? ` · ${assessment.date}` : ''}{selectedScheme?.calculationMethod === 'weighted' ? ` · weight ${assessment.weight}` : ''}</p></div>
+                  <div className="heading-actions">
+                    <button className="icon-button" type="button" aria-label={`Edit ${assessment.name}`} onClick={() => startAssessmentEditor(assessment)}><Pencil size={16} /></button>
+                    <button className="icon-button" type="button" aria-label={`Delete ${assessment.name}`} onClick={() => void removeAssessment(assessment)}><Trash2 size={16} /></button>
+                  </div>
                   <label>Marks
                     <input type="number" min="0" max={assessment.maxMarks} defaultValue={mark?.marksObtained ?? ''} placeholder={`0-${assessment.maxMarks}`} onBlur={(event) => {
                       const value = Number(event.target.value)
@@ -730,6 +865,9 @@ function AcademicsPage() {
                     }} />
                   </label>
                   <span>/ {assessment.maxMarks}</span>
+                  {mark && <button className="secondary-button" type="button" onClick={() => {
+                    deleteMark(assessment.id).then(refresh).catch((cause) => setError(cause instanceof Error ? cause.message : 'Could not delete mark'))
+                  }}>Clear mark</button>}
                 </article>
               )
             })}
@@ -742,28 +880,195 @@ function AcademicsPage() {
   )
 }
 
-function GradingScaleEditor({ onCancel, onSave }: { onCancel: () => void; onSave: (scale: Omit<GradingScale, 'id' | 'createdAt' | 'updatedAt'>) => Promise<void> }) {
-  const [name, setName] = useState('Default scale')
-  const [a, setA] = useState(10)
-  const [b, setB] = useState(8)
-  const [c, setC] = useState(6)
-  const [isDefault, setIsDefault] = useState(true)
+function optionalNumber(value: string): number | undefined {
+  if (!value.trim()) return undefined
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed)) throw new Error('Enter a valid number or leave the field empty')
+  return parsed
+}
+
+function GradingScaleEditor({
+  initialScale,
+  onCancel,
+  onSave,
+}: {
+  initialScale?: GradingScale | undefined
+  onCancel: () => void
+  onSave: (scale: Omit<GradingScale, 'id' | 'createdAt' | 'updatedAt'>, id?: string) => Promise<void>
+}) {
+  const [name, setName] = useState(initialScale?.name ?? '')
+  const [passingPercentage, setPassingPercentage] = useState(initialScale?.passingPercentage.toString() ?? '')
+  const [decimalPrecision, setDecimalPrecision] = useState(initialScale?.decimalPrecision.toString() ?? '')
+  const [boundaries, setBoundaries] = useState<GradingScale['boundaries']>(initialScale?.boundaries ?? [])
+  const [isDefault, setIsDefault] = useState(initialScale?.isDefault ?? true)
+  const [error, setError] = useState('')
+
+  const updateBoundary = (index: number, patch: Partial<GradingScale['boundaries'][number]>) => {
+    setBoundaries((current) => current.map((boundary, itemIndex) =>
+      itemIndex === index ? { ...boundary, ...patch } : boundary,
+    ))
+  }
+
   return (
     <div className="editor-card">
       <h2>Configure grading scale</h2>
+      {error && <div className="error-banner" role="alert">{error}</div>}
       <div className="form-grid">
-        <label>Name<input value={name} onChange={(event) => setName(event.target.value)} /></label>
-        <label>Grade point for 90-100<input type="number" min="0" max="10" value={a} onChange={(event) => setA(Number(event.target.value))} /></label>
-        <label>Grade point for 75-89<input type="number" min="0" max="10" value={b} onChange={(event) => setB(Number(event.target.value))} /></label>
-        <label>Grade point for 60-74<input type="number" min="0" max="10" value={c} onChange={(event) => setC(Number(event.target.value))} /></label>
+        <label>Name<input required value={name} onChange={(event) => setName(event.target.value)} /></label>
+        <label>Passing percentage<input required type="number" min="0" max="100" step="any" value={passingPercentage} onChange={(event) => setPassingPercentage(event.target.value)} /></label>
+        <label>Decimal precision<input required type="number" min="0" max="6" step="1" value={decimalPrecision} onChange={(event) => setDecimalPrecision(event.target.value)} /></label>
       </div>
+      <div className="assessment-list">
+        {boundaries.map((boundary, index) => (
+          <div className="form-grid" key={`grade-boundary-${index}`}>
+            <label>Minimum percentage<input type="number" min="0" max="100" step="any" value={boundary.minPercentage} onChange={(event) => updateBoundary(index, { minPercentage: Number(event.target.value) })} /></label>
+            <label>Grade point<input type="number" min="0" step="any" value={boundary.gradePoint} onChange={(event) => updateBoundary(index, { gradePoint: Number(event.target.value) })} /></label>
+            <label>Grade label<input required value={boundary.label} onChange={(event) => updateBoundary(index, { label: event.target.value })} /></label>
+            <label className="checkbox-label"><input type="checkbox" checked={boundary.pass} onChange={(event) => updateBoundary(index, { pass: event.target.checked })} /> Passing grade</label>
+            <button className="secondary-button" type="button" onClick={() => setBoundaries((current) => current.filter((_, itemIndex) => itemIndex !== index))}>Remove grade</button>
+          </div>
+        ))}
+      </div>
+      <button className="secondary-button" type="button" onClick={() => setBoundaries((current) => [
+        ...current,
+        { minPercentage: 0, gradePoint: 0, label: '', pass: false },
+      ])}>Add grade boundary</button>
       <label className="checkbox-label"><input type="checkbox" checked={isDefault} onChange={(event) => setIsDefault(event.target.checked)} /> Default scale</label>
-      <div className="form-actions"><button className="secondary-button" type="button" onClick={onCancel}>Cancel</button><button className="primary-button" type="button" onClick={() => onSave({ name, isDefault, passingPercentage: 40, decimalPrecision: 2, boundaries: [
-        { minPercentage: 90, gradePoint: a, label: 'A', pass: true },
-        { minPercentage: 75, gradePoint: b, label: 'B', pass: true },
-        { minPercentage: 60, gradePoint: c, label: 'C', pass: true },
-        { minPercentage: 0, gradePoint: 0, label: 'F', pass: false },
-      ] }).catch(() => undefined)}>Save scale</button></div>
+      <div className="form-actions">
+        <button className="secondary-button" type="button" onClick={onCancel}>Cancel</button>
+        <button className="primary-button" type="button" onClick={() => {
+          setError('')
+          const passing = optionalNumber(passingPercentage)
+          const precision = optionalNumber(decimalPrecision)
+          if (passing === undefined || precision === undefined) {
+            setError('Enter the passing percentage and decimal precision')
+            return
+          }
+          onSave({ name, isDefault, passingPercentage: passing, decimalPrecision: precision, boundaries }, initialScale?.id)
+            .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : 'Could not save grading scale'))
+        }}>Save scale</button>
+      </div>
+    </div>
+  )
+}
+
+function SubjectMarkingSchemeEditor({
+  initialScheme,
+  fallbackScale,
+  onCancel,
+  onSave,
+}: {
+  initialScheme?: SubjectMarkingScheme | undefined
+  fallbackScale?: GradingScale | undefined
+  onCancel: () => void
+  onSave: (scheme: SubjectMarkingScheme) => Promise<void>
+}) {
+  const [method, setMethod] = useState<SubjectMarkingScheme['calculationMethod'] | ''>(initialScheme?.calculationMethod ?? '')
+  const [bestOfCount, setBestOfCount] = useState(initialScheme?.bestOfCount?.toString() ?? '')
+  const [internalMaxMarks, setInternalMaxMarks] = useState(initialScheme?.internalMaxMarks?.toString() ?? '')
+  const [externalMaxMarks, setExternalMaxMarks] = useState(initialScheme?.externalMaxMarks?.toString() ?? '')
+  const [practicalMaxMarks, setPracticalMaxMarks] = useState(initialScheme?.practicalMaxMarks?.toString() ?? '')
+  const [passingMarks, setPassingMarks] = useState(initialScheme?.passingMarks?.toString() ?? '')
+  const [internalWeightage, setInternalWeightage] = useState(initialScheme?.internalWeightage?.toString() ?? '')
+  const [externalWeightage, setExternalWeightage] = useState(initialScheme?.externalWeightage?.toString() ?? '')
+  const [passingPercentage, setPassingPercentage] = useState(
+    initialScheme?.passingPercentage.toString() ?? fallbackScale?.passingPercentage.toString() ?? '',
+  )
+  const [decimalPrecision, setDecimalPrecision] = useState(
+    initialScheme?.decimalPrecision.toString() ?? fallbackScale?.decimalPrecision.toString() ?? '',
+  )
+  const [boundaries, setBoundaries] = useState<GradingScale['boundaries']>(
+    initialScheme?.boundaries ?? fallbackScale?.boundaries ?? [],
+  )
+  const [error, setError] = useState('')
+
+  const updateBoundary = (index: number, patch: Partial<GradingScale['boundaries'][number]>) => {
+    setBoundaries((current) => current.map((boundary, itemIndex) =>
+      itemIndex === index ? { ...boundary, ...patch } : boundary,
+    ))
+  }
+
+  const handleSave = () => {
+    setError('')
+    try {
+      if (!method) throw new Error('Choose a calculation method')
+      const passing = optionalNumber(passingPercentage)
+      const precision = optionalNumber(decimalPrecision)
+      if (passing === undefined || precision === undefined) {
+        throw new Error('Enter the passing percentage and decimal precision')
+      }
+      const best = optionalNumber(bestOfCount)
+      const internalMax = optionalNumber(internalMaxMarks)
+      const externalMax = optionalNumber(externalMaxMarks)
+      const practicalMax = optionalNumber(practicalMaxMarks)
+      const passMarks = optionalNumber(passingMarks)
+      const internalWeight = optionalNumber(internalWeightage)
+      const externalWeight = optionalNumber(externalWeightage)
+      const scheme: SubjectMarkingScheme = {
+        calculationMethod: method,
+        ...(best !== undefined ? { bestOfCount: best } : {}),
+        ...(internalMax !== undefined ? { internalMaxMarks: internalMax } : {}),
+        ...(externalMax !== undefined ? { externalMaxMarks: externalMax } : {}),
+        ...(practicalMax !== undefined ? { practicalMaxMarks: practicalMax } : {}),
+        ...(passMarks !== undefined ? { passingMarks: passMarks } : {}),
+        ...(internalWeight !== undefined ? { internalWeightage: internalWeight } : {}),
+        ...(externalWeight !== undefined ? { externalWeightage: externalWeight } : {}),
+        passingPercentage: passing,
+        decimalPrecision: precision,
+        boundaries,
+      }
+      void onSave(scheme).catch((cause: unknown) =>
+        setError(cause instanceof Error ? cause.message : 'Could not save subject marking scheme'),
+      )
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Could not save subject marking scheme')
+    }
+  }
+
+  return (
+    <div className="editor-card">
+      <h2>Configure subject marking scheme</h2>
+      <p className="muted-state">Categories beginning with “external” use the external component. Practical and other custom categories are grouped with internal when component weightages are used.</p>
+      {error && <div className="error-banner" role="alert">{error}</div>}
+      <div className="form-grid">
+        <label>Assessment calculation
+          <select value={method} onChange={(event) => setMethod(event.target.value as SubjectMarkingScheme['calculationMethod'] | '')}>
+            <option value="">Choose calculation</option>
+            <option value="total">Total marks</option>
+            <option value="average">Average percentage</option>
+            <option value="best_of">Best of N assessments</option>
+            <option value="weighted">Weighted calculation</option>
+          </select>
+        </label>
+        {method === 'best_of' && <label>Best N<input required type="number" min="1" step="1" value={bestOfCount} onChange={(event) => setBestOfCount(event.target.value)} /></label>}
+        <label>Internal maximum marks<input type="number" min="0.01" step="any" value={internalMaxMarks} onChange={(event) => setInternalMaxMarks(event.target.value)} /></label>
+        <label>External maximum marks<input type="number" min="0.01" step="any" value={externalMaxMarks} onChange={(event) => setExternalMaxMarks(event.target.value)} /></label>
+        <label>Practical maximum marks<input type="number" min="0.01" step="any" value={practicalMaxMarks} onChange={(event) => setPracticalMaxMarks(event.target.value)} /></label>
+        <label>Passing marks<input type="number" min="0" step="any" value={passingMarks} onChange={(event) => setPassingMarks(event.target.value)} /></label>
+        <label>Internal weightage (%)<input type="number" min="0" max="100" step="any" value={internalWeightage} onChange={(event) => setInternalWeightage(event.target.value)} /></label>
+        <label>External weightage (%)<input type="number" min="0" max="100" step="any" value={externalWeightage} onChange={(event) => setExternalWeightage(event.target.value)} /></label>
+        <label>Passing percentage<input required type="number" min="0" max="100" step="any" value={passingPercentage} onChange={(event) => setPassingPercentage(event.target.value)} /></label>
+        <label>Decimal precision<input required type="number" min="0" max="6" step="1" value={decimalPrecision} onChange={(event) => setDecimalPrecision(event.target.value)} /></label>
+      </div>
+      <div className="assessment-list">
+        {boundaries.map((boundary, index) => (
+          <div className="form-grid" key={`subject-grade-boundary-${index}`}>
+            <label>Minimum percentage<input type="number" min="0" max="100" step="any" value={boundary.minPercentage} onChange={(event) => updateBoundary(index, { minPercentage: Number(event.target.value) })} /></label>
+            <label>Grade point<input type="number" min="0" step="any" value={boundary.gradePoint} onChange={(event) => updateBoundary(index, { gradePoint: Number(event.target.value) })} /></label>
+            <label>Grade label<input required value={boundary.label} onChange={(event) => updateBoundary(index, { label: event.target.value })} /></label>
+            <label className="checkbox-label"><input type="checkbox" checked={boundary.pass} onChange={(event) => updateBoundary(index, { pass: event.target.checked })} /> Passing grade</label>
+            <button className="secondary-button" type="button" onClick={() => setBoundaries((current) => current.filter((_, itemIndex) => itemIndex !== index))}>Remove grade</button>
+          </div>
+        ))}
+      </div>
+      <button className="secondary-button" type="button" onClick={() => setBoundaries((current) => [
+        ...current,
+        { minPercentage: 0, gradePoint: 0, label: '', pass: false },
+      ])}>Add grade boundary</button>
+      <div className="form-actions">
+        <button className="secondary-button" type="button" onClick={onCancel}>Cancel</button>
+        <button className="primary-button" type="button" onClick={handleSave}>Save scheme</button>
+      </div>
     </div>
   )
 }

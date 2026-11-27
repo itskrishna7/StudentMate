@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { db } from './database'
 import { loadDashboardData } from './dashboard'
+import { saveSubjectMarkingScheme } from './markingSchemes'
 
 afterEach(async () => {
   await db.transaction('rw', db.tables, async () => {
@@ -150,5 +151,54 @@ describe('dashboard aggregation', () => {
     expect(dashboard.todayLectures).toHaveLength(1)
     expect(dashboard.upcomingExaminations[0]?.title).toBe('Data Structures Exam')
     expect(dashboard.belowTargetSubjects[0]?.subjectId).toBe('subject-a')
+  })
+
+  it('uses the subject marking scheme for dashboard percentages and SGPA', async () => {
+    await db.semesters.add({
+      id: 'semester-current',
+      name: 'Current semester',
+      startDate: '2026-07-01',
+      endDate: '2026-12-31',
+      isCurrent: true,
+      createdAt: '',
+      updatedAt: '',
+    })
+    await db.subjects.add({
+      id: 'subject-marking-scheme',
+      semesterId: 'semester-current',
+      name: 'Configured subject',
+      code: 'CFG',
+      facultyName: '',
+      credits: 4,
+      kind: 'theory',
+      attendanceTarget: 75,
+      color: '#4f46e5',
+      archived: false,
+      createdAt: '',
+      updatedAt: '',
+    })
+    await db.assessments.bulkAdd([
+      { id: 'internal-assessment', subjectId: 'subject-marking-scheme', name: 'Internal', type: 'other', category: 'internal', maxMarks: 10, weight: 0, createdAt: '', updatedAt: '' },
+      { id: 'external-assessment', subjectId: 'subject-marking-scheme', name: 'External', type: 'other', category: 'external', maxMarks: 20, weight: 0, createdAt: '', updatedAt: '' },
+    ])
+    await db.marks.bulkAdd([
+      { id: 'internal-mark', assessmentId: 'internal-assessment', subjectId: 'subject-marking-scheme', marksObtained: 8, enteredAt: '', createdAt: '', updatedAt: '' },
+      { id: 'external-mark', assessmentId: 'external-assessment', subjectId: 'subject-marking-scheme', marksObtained: 15, enteredAt: '', createdAt: '', updatedAt: '' },
+    ])
+    await saveSubjectMarkingScheme('subject-marking-scheme', {
+      calculationMethod: 'total',
+      internalWeightage: 40,
+      externalWeightage: 60,
+      passingPercentage: 40,
+      decimalPrecision: 2,
+      boundaries: [
+        { minPercentage: 70, gradePoint: 9, label: 'A', pass: true },
+        { minPercentage: 0, gradePoint: 2, label: 'F', pass: false },
+      ],
+    })
+
+    const dashboard = await loadDashboardData(new Date('2026-11-25T12:00:00'))
+    expect(dashboard.marksSummary[0]?.percentage).toBe(77)
+    expect(dashboard.currentSGPA).toBe(9)
   })
 })

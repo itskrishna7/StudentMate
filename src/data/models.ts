@@ -78,9 +78,26 @@ export interface Assessment extends BaseRecord {
   subjectId: string
   name: string
   type: 'assignment' | 'quiz' | 'mid_semester' | 'practical' | 'other'
+  category?: string
   maxMarks: number
   weight: number
   date?: string
+}
+
+export type AssessmentCalculationMethod = 'total' | 'average' | 'best_of' | 'weighted'
+
+export interface SubjectMarkingScheme {
+  calculationMethod: AssessmentCalculationMethod
+  bestOfCount?: number
+  internalMaxMarks?: number
+  externalMaxMarks?: number
+  practicalMaxMarks?: number
+  passingMarks?: number
+  internalWeightage?: number
+  externalWeightage?: number
+  passingPercentage: number
+  decimalPrecision: number
+  boundaries: GradeBoundary[]
 }
 
 export interface Mark extends BaseRecord {

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { db } from './database'
+import { getSubjectMarkingScheme, saveSubjectMarkingScheme } from './markingSchemes'
 import {
   createFullBackup,
   previewRestore,
@@ -50,6 +51,50 @@ describe('backup and restore', () => {
     await db.studentSemesterResults.clear()
     await restoreBackup(validateBackupText(JSON.stringify(backup)))
     expect((await db.studentSemesterResults.get('semester-result-1'))?.sgpa).toBe(8.25)
+  })
+
+  it('backs up and restores subject marking schemes using existing settings storage', async () => {
+    const scheme = {
+      calculationMethod: 'average' as const,
+      passingPercentage: 50,
+      decimalPrecision: 1,
+      boundaries: [{ minPercentage: 0, gradePoint: 0, label: 'Fail', pass: false }],
+    }
+    await saveSubjectMarkingScheme('subject-1', scheme)
+
+    const backup = validateBackupText(JSON.stringify(await createFullBackup()))
+    expect(backup.data.appSettings).toHaveLength(1)
+    await db.appSettings.clear()
+    await restoreBackup(backup)
+
+    expect(await getSubjectMarkingScheme('subject-1')).toEqual(scheme)
+  })
+
+  it('does not overwrite an existing subject scheme when an imported backup has a different setting id', async () => {
+    const savedScheme = {
+      calculationMethod: 'average' as const,
+      passingPercentage: 50,
+      decimalPrecision: 1,
+      boundaries: [{ minPercentage: 0, gradePoint: 0, label: 'Fail', pass: false }],
+    }
+    const existingScheme = {
+      ...savedScheme,
+      calculationMethod: 'total' as const,
+      passingPercentage: 45,
+    }
+    await saveSubjectMarkingScheme('subject-1', savedScheme)
+    const backup = await createFullBackup()
+    const importedSetting = backup.data.appSettings![0] as Record<string, unknown>
+    importedSetting.id = 'different-device-setting-id'
+    await saveSubjectMarkingScheme('subject-1', existingScheme)
+
+    expect(await previewRestore(backup)).toMatchObject({
+      additions: 0,
+      duplicateRows: 1,
+      byTable: { appSettings: { additions: 0, duplicates: 1 } },
+    })
+    await restoreBackup(backup)
+    expect(await getSubjectMarkingScheme('subject-1')).toEqual(existingScheme)
   })
 
   it('previews semester-number conflicts as duplicates without overwriting existing results', async () => {

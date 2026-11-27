@@ -1,4 +1,4 @@
-import type { Assessment, GradeBoundary, Mark, Semester, Subject } from './models'
+import type { Assessment, GradeBoundary, Mark, Semester, Subject, SubjectMarkingScheme } from './models'
 
 export interface SemesterGrade {
   sgpa: number
@@ -12,6 +12,24 @@ export function gradePointForPercentage(
   return [...scale]
     .sort((a, b) => b.minPercentage - a.minPercentage)
     .find((boundary) => percentage >= boundary.minPercentage)
+}
+
+export function gradeForSubjectPercentage(
+  percentage: number,
+  scale: GradeBoundary[],
+  scheme?: SubjectMarkingScheme,
+): GradeBoundary | undefined {
+  const grade = gradePointForPercentage(percentage, scale)
+  if (!scheme?.passingMarks) return grade
+  const configuredMaximum = (scheme.internalMaxMarks ?? 0) +
+    (scheme.externalMaxMarks ?? 0) +
+    (scheme.practicalMaxMarks ?? 0)
+  if (configuredMaximum <= 0 || percentage * configuredMaximum / 100 >= scheme.passingMarks) {
+    return grade
+  }
+  return [...scale]
+    .filter((boundary) => !boundary.pass)
+    .sort((a, b) => a.minPercentage - b.minPercentage)[0]
 }
 
 export function calculateSGPA(
@@ -45,21 +63,65 @@ export function calculateCGPA(
 export function calculateAssessmentPercentage(
   assessmentRows: Assessment[],
   markRows: Mark[],
+  scheme?: SubjectMarkingScheme,
 ): number {
   if (!assessmentRows.length) return 0
-  const weighted = assessmentRows.reduce((sum, assessment) => {
+  const scored = assessmentRows.flatMap((assessment) => {
     const mark = markRows.find((item) => item.assessmentId === assessment.id)
-    if (!mark) return sum
-    if (assessment.maxMarks <= 0 || assessment.weight < 0) {
-      throw new Error('Assessment maximum marks and weight must be valid')
+    if (!mark) return []
+    if (assessment.maxMarks <= 0 || assessment.weight < 0 || mark.marksObtained < 0 ||
+      mark.marksObtained > assessment.maxMarks) {
+      throw new Error('Assessment marks and maximum marks must be valid')
     }
-    return sum + (mark.marksObtained / assessment.maxMarks) * assessment.weight
-  }, 0)
-  const enteredWeight = assessmentRows.reduce((sum, assessment) => {
-    const hasMark = markRows.some((mark) => mark.assessmentId === assessment.id)
-    return sum + (hasMark ? assessment.weight : 0)
-  }, 0)
-  return enteredWeight === 0 ? 0 : (weighted / enteredWeight) * 100
+    return [{ assessment, percentage: (mark.marksObtained / assessment.maxMarks) * 100 }]
+  })
+  if (!scored.length) return 0
+
+  const aggregate = (items: typeof scored, method: SubjectMarkingScheme['calculationMethod']): number | undefined => {
+    if (!items.length) return undefined
+    if (method === 'total') {
+      const maximum = items.reduce((sum, item) => sum + item.assessment.maxMarks, 0)
+      return maximum === 0 ? undefined : items.reduce((sum, item) => sum + item.assessment.maxMarks * item.percentage / 100, 0) / maximum * 100
+    }
+    if (method === 'average') {
+      return items.reduce((sum, item) => sum + item.percentage, 0) / items.length
+    }
+    if (method === 'best_of') {
+      const count = scheme?.bestOfCount ?? items.length
+      const best = [...items].sort((a, b) => b.percentage - a.percentage).slice(0, count)
+      return best.reduce((sum, item) => sum + item.percentage, 0) / best.length
+    }
+    const totalWeight = items.reduce((sum, item) => sum + item.assessment.weight, 0)
+    return totalWeight === 0
+      ? undefined
+      : items.reduce((sum, item) => sum + item.percentage * item.assessment.weight, 0) / totalWeight
+  }
+
+  if (!scheme) {
+    return aggregate(scored, 'weighted') ?? 0
+  }
+
+  if (scheme.internalWeightage === undefined || scheme.externalWeightage === undefined) {
+    return aggregate(scored, scheme.calculationMethod) ?? 0
+  }
+
+  const internal = scored.filter(({ assessment }) => {
+    const category = (assessment.category ?? assessment.type).trim().toLowerCase()
+    return !category.startsWith('external')
+  })
+  const external = scored.filter(({ assessment }) =>
+    (assessment.category ?? assessment.type).trim().toLowerCase().startsWith('external'),
+  )
+  const components = [
+    { percentage: aggregate(internal, scheme.calculationMethod), weight: scheme.internalWeightage },
+    { percentage: aggregate(external, scheme.calculationMethod), weight: scheme.externalWeightage },
+  ].filter((item): item is { percentage: number; weight: number } =>
+    item.percentage !== undefined && item.weight > 0,
+  )
+  const totalWeight = components.reduce((sum, item) => sum + item.weight, 0)
+  return totalWeight === 0
+    ? 0
+    : components.reduce((sum, item) => sum + item.percentage * item.weight, 0) / totalWeight
 }
 
 export function requiredMarks(
