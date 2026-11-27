@@ -31,13 +31,13 @@ export default function DashboardCharts({ attendance, marks }: DashboardChartsPr
               <ResponsiveContainer width="100%" height="100%">
                 <ComposedChart data={attendanceData} margin={{ top: 8, right: 8, left: -18, bottom: 0 }}>
                   <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--chart-grid)" />
-                  <XAxis dataKey="name" tick={{ fill: 'var(--chart-text)', fontSize: 11 }} axisLine={false} tickLine={false} />
-                  <YAxis domain={[0, 100]} tick={{ fill: 'var(--chart-text)', fontSize: 11 }} axisLine={false} tickLine={false} />
+                  <XAxis dataKey="name" tick={{ fill: 'var(--chart-text)', fontSize: 12 }} axisLine={false} tickLine={false} />
+                  <YAxis domain={[0, 100]} tick={{ fill: 'var(--chart-text)', fontSize: 12 }} axisLine={false} tickLine={false} />
                   <Tooltip
                     cursor={{ fill: 'var(--chart-cursor)' }}
-                    contentStyle={{ borderRadius: 12, border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text)' }}
+                    contentStyle={{ borderRadius: 10, border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text)', boxShadow: 'var(--shadow-popover)', fontSize: 13 }}
                   />
-                  <Legend iconType="circle" wrapperStyle={{ fontSize: 12, paddingTop: 8 }} />
+                  <Legend iconType="circle" wrapperStyle={{ color: 'var(--muted)', fontSize: 12, paddingTop: 8 }} />
                   <Bar dataKey="attendance" name="Attendance" fill="var(--primary)" radius={[6, 6, 0, 0]} maxBarSize={38} />
                   <Line type="monotone" dataKey="target" name="Target" stroke="var(--warning)" strokeWidth={2} dot={false} />
                 </ComposedChart>
@@ -65,9 +65,9 @@ export default function DashboardCharts({ attendance, marks }: DashboardChartsPr
             <ResponsiveContainer width="100%" height="100%">
               <ComposedChart data={marksData} margin={{ top: 8, right: 8, left: -18, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--chart-grid)" />
-                <XAxis dataKey="name" tick={{ fill: 'var(--chart-text)', fontSize: 11 }} axisLine={false} tickLine={false} />
-                <YAxis domain={[0, 100]} tick={{ fill: 'var(--chart-text)', fontSize: 11 }} axisLine={false} tickLine={false} />
-                <Tooltip contentStyle={{ borderRadius: 12, border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text)' }} />
+                <XAxis dataKey="name" tick={{ fill: 'var(--chart-text)', fontSize: 12 }} axisLine={false} tickLine={false} />
+                <YAxis domain={[0, 100]} tick={{ fill: 'var(--chart-text)', fontSize: 12 }} axisLine={false} tickLine={false} />
+                <Tooltip contentStyle={{ borderRadius: 10, border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text)', boxShadow: 'var(--shadow-popover)', fontSize: 13 }} />
                 <Bar dataKey="percentage" name="Assessment" fill="var(--primary)" radius={[6, 6, 0, 0]} maxBarSize={38} />
               </ComposedChart>
             </ResponsiveContainer>

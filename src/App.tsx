@@ -15,6 +15,8 @@ import { buildImportReview, extractDocument, findSubjectMatch, reviewStateForIte
 import { createFullBackup, downloadJsonBackup, previewRestore, restoreBackup, validateBackupText, type RestorePreview, type StudentMateBackup } from './data/backup'
 import { loadDashboardData, type DashboardData } from './data/dashboard'
 import { enterDemoMode, isDemoMode, resetDemoData, seedDemoData } from './data/demo'
+import { ConfirmDialogProvider } from './components/ConfirmDialog'
+import { useConfirmDialog } from './components/confirmDialogContext'
 
 const AnalyticsPage = lazy(() => import('./features/AnalyticsPage'))
 const DashboardCharts = lazy(() => import('./features/DashboardCharts'))
@@ -45,6 +47,10 @@ function AppShell() {
   useEffect(() => {
     document.documentElement.dataset.theme = theme
     localStorage.setItem('studentmate-theme', theme)
+    document.querySelector<HTMLMetaElement>('meta[name="theme-color"]')?.setAttribute(
+      'content',
+      theme === 'dark' ? '#101216' : '#f6f7fb',
+    )
   }, [theme])
 
   useEffect(() => {
@@ -80,50 +86,59 @@ function AppShell() {
           <span>StudentMate</span>
         </Link>
         <nav className="side-nav">
-          <Link className={location.pathname === '/' ? 'nav-item active' : 'nav-item'} to="/">
-            <LayoutDashboard size={19} />
-            <span>Dashboard</span>
-          </Link>
-          <Link className={location.pathname === '/subjects' ? 'nav-item active' : 'nav-item'} to="/subjects">
-            <BookOpen size={19} />
-            <span>Subjects</span>
-          </Link>
-          <Link className={location.pathname === '/timetable' ? 'nav-item active' : 'nav-item'} to="/timetable">
-            <Clock3 size={19} />
-            <span>Timetable</span>
-          </Link>
-          <Link className={location.pathname === '/calendar' ? 'nav-item active' : 'nav-item'} to="/calendar">
-            <CalendarDays size={19} />
-            <span>Calendar</span>
-          </Link>
-          <Link className={location.pathname === '/attendance' ? 'nav-item active' : 'nav-item'} to="/attendance">
-            <ClipboardCheck size={19} />
-            <span>Attendance</span>
-          </Link>
-          <Link className={location.pathname === '/academics' ? 'nav-item active' : 'nav-item'} to="/academics">
-            <Calculator size={19} />
-            <span>Academics</span>
-          </Link>
-          <Link className={location.pathname === '/performance' ? 'nav-item active' : 'nav-item'} to="/performance">
-            <GraduationCap size={19} />
-            <span>Performance</span>
-          </Link>
-          <Link className={location.pathname === '/import' ? 'nav-item active' : 'nav-item'} to="/import">
-            <FileUp size={19} />
-            <span>Import</span>
-          </Link>
-          <Link className={location.pathname === '/analytics' ? 'nav-item active' : 'nav-item'} to="/analytics">
-            <BarChart3 size={19} />
-            <span>Analytics</span>
-          </Link>
-          <Link className={location.pathname === '/backup' ? 'nav-item active' : 'nav-item'} to="/backup">
-            <DatabaseBackup size={19} />
-            <span>Backup</span>
-          </Link>
-          <Link className={location.pathname === '/settings' ? 'nav-item active' : 'nav-item'} to="/settings">
-            <Settings size={19} />
-            <span>Settings</span>
-          </Link>
+          <div className="nav-group">
+            <span className="nav-group-label">Workspace</span>
+            <Link aria-current={location.pathname === '/' ? 'page' : undefined} className={location.pathname === '/' ? 'nav-item active' : 'nav-item'} to="/">
+              <LayoutDashboard size={18} />
+              <span>Dashboard</span>
+            </Link>
+            <Link aria-current={location.pathname === '/subjects' ? 'page' : undefined} className={location.pathname === '/subjects' ? 'nav-item active' : 'nav-item'} to="/subjects">
+              <BookOpen size={18} />
+              <span>Subjects</span>
+            </Link>
+            <Link aria-current={location.pathname === '/timetable' ? 'page' : undefined} className={location.pathname === '/timetable' ? 'nav-item active' : 'nav-item'} to="/timetable">
+              <Clock3 size={18} />
+              <span>Timetable</span>
+            </Link>
+            <Link aria-current={location.pathname === '/calendar' ? 'page' : undefined} className={location.pathname === '/calendar' ? 'nav-item active' : 'nav-item'} to="/calendar">
+              <CalendarDays size={18} />
+              <span>Calendar</span>
+            </Link>
+            <Link aria-current={location.pathname === '/attendance' ? 'page' : undefined} className={location.pathname === '/attendance' ? 'nav-item active' : 'nav-item'} to="/attendance">
+              <ClipboardCheck size={18} />
+              <span>Attendance</span>
+            </Link>
+          </div>
+          <div className="nav-group">
+            <span className="nav-group-label">Study</span>
+            <Link aria-current={location.pathname === '/academics' ? 'page' : undefined} className={location.pathname === '/academics' ? 'nav-item active' : 'nav-item'} to="/academics">
+              <Calculator size={18} />
+              <span>Academics</span>
+            </Link>
+            <Link aria-current={location.pathname === '/performance' ? 'page' : undefined} className={location.pathname === '/performance' ? 'nav-item active' : 'nav-item'} to="/performance">
+              <GraduationCap size={18} />
+              <span>Performance</span>
+            </Link>
+            <Link aria-current={location.pathname === '/analytics' ? 'page' : undefined} className={location.pathname === '/analytics' ? 'nav-item active' : 'nav-item'} to="/analytics">
+              <BarChart3 size={18} />
+              <span>Analytics</span>
+            </Link>
+          </div>
+          <div className="nav-group">
+            <span className="nav-group-label">Tools</span>
+            <Link aria-current={location.pathname === '/import' ? 'page' : undefined} className={location.pathname === '/import' ? 'nav-item active' : 'nav-item'} to="/import">
+              <FileUp size={18} />
+              <span>Import</span>
+            </Link>
+            <Link aria-current={location.pathname === '/backup' ? 'page' : undefined} className={location.pathname === '/backup' ? 'nav-item active' : 'nav-item'} to="/backup">
+              <DatabaseBackup size={18} />
+              <span>Backup</span>
+            </Link>
+            <Link aria-current={location.pathname === '/settings' ? 'page' : undefined} className={location.pathname === '/settings' ? 'nav-item active' : 'nav-item'} to="/settings">
+              <Settings size={18} />
+              <span>Settings</span>
+            </Link>
+          </div>
         </nav>
         <div className="sidebar-status" title={online ? 'Online' : 'Offline'}>
           {online ? <Wifi size={16} /> : <WifiOff size={16} />}
@@ -156,17 +171,17 @@ function AppShell() {
         </header>
 
         <nav className="mobile-nav" aria-label="Mobile navigation">
-          <Link className={location.pathname === '/' ? 'mobile-nav-item active' : 'mobile-nav-item'} to="/"><LayoutDashboard size={17} /><span>Home</span></Link>
-          <Link className={location.pathname === '/subjects' ? 'mobile-nav-item active' : 'mobile-nav-item'} to="/subjects"><BookOpen size={17} /><span>Subjects</span></Link>
-          <Link className={location.pathname === '/timetable' ? 'mobile-nav-item active' : 'mobile-nav-item'} to="/timetable"><Clock3 size={17} /><span>Timetable</span></Link>
-          <Link className={location.pathname === '/calendar' ? 'mobile-nav-item active' : 'mobile-nav-item'} to="/calendar"><CalendarDays size={17} /><span>Calendar</span></Link>
-          <Link className={location.pathname === '/attendance' ? 'mobile-nav-item active' : 'mobile-nav-item'} to="/attendance"><ClipboardCheck size={17} /><span>Attendance</span></Link>
-          <Link className={location.pathname === '/academics' ? 'mobile-nav-item active' : 'mobile-nav-item'} to="/academics"><Calculator size={17} /><span>Academics</span></Link>
-          <Link className={location.pathname === '/performance' ? 'mobile-nav-item active' : 'mobile-nav-item'} to="/performance"><GraduationCap size={17} /><span>Performance</span></Link>
-          <Link className={location.pathname === '/import' ? 'mobile-nav-item active' : 'mobile-nav-item'} to="/import"><FileUp size={17} /><span>Import</span></Link>
-          <Link className={location.pathname === '/analytics' ? 'mobile-nav-item active' : 'mobile-nav-item'} to="/analytics"><BarChart3 size={17} /><span>Analytics</span></Link>
-          <Link className={location.pathname === '/backup' ? 'mobile-nav-item active' : 'mobile-nav-item'} to="/backup"><DatabaseBackup size={17} /><span>Backup</span></Link>
-          <Link className={location.pathname === '/settings' ? 'mobile-nav-item active' : 'mobile-nav-item'} to="/settings"><Settings size={17} /><span>Settings</span></Link>
+          <Link aria-current={location.pathname === '/' ? 'page' : undefined} className={location.pathname === '/' ? 'mobile-nav-item active' : 'mobile-nav-item'} to="/"><LayoutDashboard size={17} /><span>Home</span></Link>
+          <Link aria-current={location.pathname === '/subjects' ? 'page' : undefined} className={location.pathname === '/subjects' ? 'mobile-nav-item active' : 'mobile-nav-item'} to="/subjects"><BookOpen size={17} /><span>Subjects</span></Link>
+          <Link aria-current={location.pathname === '/timetable' ? 'page' : undefined} className={location.pathname === '/timetable' ? 'mobile-nav-item active' : 'mobile-nav-item'} to="/timetable"><Clock3 size={17} /><span>Timetable</span></Link>
+          <Link aria-current={location.pathname === '/calendar' ? 'page' : undefined} className={location.pathname === '/calendar' ? 'mobile-nav-item active' : 'mobile-nav-item'} to="/calendar"><CalendarDays size={17} /><span>Calendar</span></Link>
+          <Link aria-current={location.pathname === '/attendance' ? 'page' : undefined} className={location.pathname === '/attendance' ? 'mobile-nav-item active' : 'mobile-nav-item'} to="/attendance"><ClipboardCheck size={17} /><span>Attendance</span></Link>
+          <Link aria-current={location.pathname === '/academics' ? 'page' : undefined} className={location.pathname === '/academics' ? 'mobile-nav-item active' : 'mobile-nav-item'} to="/academics"><Calculator size={17} /><span>Academics</span></Link>
+          <Link aria-current={location.pathname === '/performance' ? 'page' : undefined} className={location.pathname === '/performance' ? 'mobile-nav-item active' : 'mobile-nav-item'} to="/performance"><GraduationCap size={17} /><span>Performance</span></Link>
+          <Link aria-current={location.pathname === '/import' ? 'page' : undefined} className={location.pathname === '/import' ? 'mobile-nav-item active' : 'mobile-nav-item'} to="/import"><FileUp size={17} /><span>Import</span></Link>
+          <Link aria-current={location.pathname === '/analytics' ? 'page' : undefined} className={location.pathname === '/analytics' ? 'mobile-nav-item active' : 'mobile-nav-item'} to="/analytics"><BarChart3 size={17} /><span>Analytics</span></Link>
+          <Link aria-current={location.pathname === '/backup' ? 'page' : undefined} className={location.pathname === '/backup' ? 'mobile-nav-item active' : 'mobile-nav-item'} to="/backup"><DatabaseBackup size={17} /><span>Backup</span></Link>
+          <Link aria-current={location.pathname === '/settings' ? 'page' : undefined} className={location.pathname === '/settings' ? 'mobile-nav-item active' : 'mobile-nav-item'} to="/settings"><Settings size={17} /><span>Settings</span></Link>
         </nav>
 
         {!online && (
@@ -332,7 +347,10 @@ function Dashboard() {
               <section className="premium-panel">
                 <div className="premium-panel-heading">
                   <div><p>DAY PLAN</p><h2>Today's timetable</h2></div>
-                  <Link className="premium-panel-link" to="/timetable">View timetable <ArrowRight size={14} /></Link>
+                  <div className="premium-panel-actions">
+                    {countdown && <span className="premium-countdown"><Timer size={14} />{countdown} to next class</span>}
+                    <Link className="premium-panel-link" to="/timetable">View timetable <ArrowRight size={14} /></Link>
+                  </div>
                 </div>
                 {data.todayLectures.length === 0 ? (
                   <div className="premium-empty-inline"><Clock3 size={18} /><span>No lectures scheduled today.</span></div>
@@ -355,20 +373,6 @@ function Dashboard() {
                     ))}
                   </div>
                 )}
-              </section>
-
-              <section className="premium-next-card">
-                <div className="premium-next-icon"><Timer size={20} /></div>
-                {nextLecture ? (
-                  <div className="premium-next-content">
-                    <p>Next lecture</p>
-                    <h2>{nextLecture.subjectName}</h2>
-                    <span>{nextLecture.startTime}{nextLecture.endTime ? `–${nextLecture.endTime}` : ''} · {nextLecture.room || 'Location not set'}</span>
-                  </div>
-                ) : (
-                  <div className="premium-next-content"><p>Next lecture</p><h2>No upcoming lecture</h2><span>Check your timetable for later sessions.</span></div>
-                )}
-                {countdown && <strong className="premium-countdown">{countdown}</strong>}
               </section>
 
               <section className="premium-panel">
@@ -481,6 +485,7 @@ function Dashboard() {
 }
 
 function SubjectsPage() {
+  const { confirm } = useConfirmDialog()
   const [semesters, setSemesters] = useState<Semester[]>([])
   const [subjects, setSubjects] = useState<Subject[]>([])
   const [includeArchived, setIncludeArchived] = useState(false)
@@ -522,7 +527,12 @@ function SubjectsPage() {
   }
 
   const removeSubject = async (subject: Subject) => {
-    if (!window.confirm(`Delete "${subject.name}"? Historical subjects should be archived instead.`)) return
+    if (!(await confirm({
+      title: 'Delete this subject?',
+      description: `"${subject.name}" will be removed. Subjects with academic history must be archived instead.`,
+      confirmLabel: 'Delete subject',
+      variant: 'danger',
+    }))) return
     setError('')
     const result = await deleteSubject(subject.id)
     if (result === 'blocked') {
@@ -788,6 +798,7 @@ function SubjectEditor({ semesters, record, onCancel, onSave }: { semesters: Sem
 }
 
 function AttendancePage() {
+  const { confirm } = useConfirmDialog()
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10))
   const [subjects, setSubjects] = useState<Subject[]>([])
   const [rules, setRules] = useState<TimetableRule[]>([])
@@ -868,7 +879,11 @@ function AttendancePage() {
   }
 
   const markSelectedDayAsHoliday = async () => {
-    if (!window.confirm(`Mark ${date} as a holiday? All classes on this date will be excluded from attendance totals. Existing attendance records will be kept.`)) return
+    if (!(await confirm({
+      title: 'Mark this day as a holiday?',
+      description: `All classes on ${date} will be excluded from attendance totals. Existing attendance records will be kept.`,
+      confirmLabel: 'Mark as holiday',
+    }))) return
     setError('')
     setNotice('')
     try {
@@ -1256,6 +1271,7 @@ function BackupPage() {
 }
 
 function ImportPage() {
+  const { confirm } = useConfirmDialog()
   const [documentType, setDocumentType] = useState<DocumentType | 'auto'>('auto')
   const [file, setFile] = useState<File | null>(null)
   const [sourceType, setSourceType] = useState<'pdf' | 'image'>('pdf')
@@ -1386,7 +1402,11 @@ function ImportPage() {
     if (!file || !review || validItems.length === 0) return
     const duplicateCount = review.items.filter((item) => reviewStateForItem(item, review.items) === 'duplicate').length
     const warningCount = review.items.filter((item) => itemWarnings(item).length > 0).length
-    if (!window.confirm(`Import ${validItems.length} valid entr${validItems.length === 1 ? 'y' : 'ies'}? ${duplicateCount} duplicate row(s) and ${warningCount} warning(s) will be skipped or need attention. Existing records will not be overwritten.`)) return
+    if (!(await confirm({
+      title: 'Import academic data?',
+      description: `Import ${validItems.length} valid entr${validItems.length === 1 ? 'y' : 'ies'}? ${duplicateCount} duplicate row(s) and ${warningCount} warning(s) will be skipped or need attention. Existing records will not be overwritten.`,
+      confirmLabel: 'Import entries',
+    }))) return
     setError('')
     setConfirmed('')
     let saved = 0
@@ -1675,4 +1695,10 @@ function SettingsPage({ theme, toggleTheme, installPrompt, onInstall }: { theme:
   )
 }
 
-export default AppShell
+export default function App() {
+  return (
+    <ConfirmDialogProvider>
+      <AppShell />
+    </ConfirmDialogProvider>
+  )
+}

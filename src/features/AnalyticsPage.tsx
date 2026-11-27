@@ -59,6 +59,15 @@ export default function AnalyticsPage() {
     ),
     color: subject.color,
   }))
+  const axisTick = { fill: 'var(--chart-text)', fontSize: 12 }
+  const tooltipStyle = {
+    borderRadius: 10,
+    border: '1px solid var(--border)',
+    background: 'var(--surface)',
+    color: 'var(--text)',
+    boxShadow: 'var(--shadow-popover)',
+    fontSize: 13,
+  }
 
   return (
     <div className="page">
@@ -80,8 +89,10 @@ export default function AnalyticsPage() {
               <div className="chart-box">
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={attendanceData}>
-                    <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                    <XAxis dataKey="name" /><YAxis domain={[0, 100]} /><Tooltip />
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--chart-grid)" />
+                    <XAxis dataKey="name" tick={axisTick} axisLine={false} tickLine={false} />
+                    <YAxis domain={[0, 100]} tick={axisTick} axisLine={false} tickLine={false} />
+                    <Tooltip cursor={{ fill: 'var(--chart-cursor)' }} contentStyle={tooltipStyle} />
                     <Bar dataKey="attendance" radius={[6, 6, 0, 0]}>
                       {attendanceData.map((entry, index) => <Cell key={`${entry.name}-${index}`} fill={entry.color} />)}
                     </Bar>
@@ -94,8 +105,10 @@ export default function AnalyticsPage() {
               <div className="chart-box">
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={academicData}>
-                    <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                    <XAxis dataKey="name" /><YAxis domain={[0, 100]} /><Tooltip />
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--chart-grid)" />
+                    <XAxis dataKey="name" tick={axisTick} axisLine={false} tickLine={false} />
+                    <YAxis domain={[0, 100]} tick={axisTick} axisLine={false} tickLine={false} />
+                    <Tooltip cursor={{ fill: 'var(--chart-cursor)' }} contentStyle={tooltipStyle} />
                     <Bar dataKey="percentage" radius={[6, 6, 0, 0]}>
                       {academicData.map((entry, index) => <Cell key={`${entry.name}-${index}`} fill={entry.color} />)}
                     </Bar>

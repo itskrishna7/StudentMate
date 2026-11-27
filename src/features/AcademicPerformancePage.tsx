@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { useConfirmDialog } from '../components/confirmDialogContext'
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import {
   calculateRequiredSGPA,
@@ -43,11 +44,16 @@ function ProgressionChart({ data }: { data: AcademicPerformanceData }) {
     <div className="academic-performance-chart">
       <ResponsiveContainer width="100%" height="100%">
         <LineChart data={data.progression} margin={{ top: 8, right: 12, bottom: 4, left: 0 }}>
-          <CartesianGrid strokeDasharray="3 3" vertical={false} />
-          <XAxis dataKey="semesterNumber" tickFormatter={(value: number) => `Sem ${value}`} />
-          <YAxis domain={[0, data.maxSGPA]} />
-          <Tooltip formatter={(value) => [Number(value).toFixed(data.decimalPrecision), 'CGPA']} labelFormatter={(value) => `Semester ${value}`} />
-          <Line type="monotone" dataKey="cgpa" stroke="var(--primary)" strokeWidth={3} dot={{ r: 4 }} />
+          <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--chart-grid)" />
+          <XAxis dataKey="semesterNumber" tick={{ fill: 'var(--chart-text)', fontSize: 12 }} axisLine={false} tickLine={false} tickFormatter={(value: number) => `Sem ${value}`} />
+          <YAxis domain={[0, data.maxSGPA]} tick={{ fill: 'var(--chart-text)', fontSize: 12 }} axisLine={false} tickLine={false} />
+          <Tooltip
+            cursor={{ stroke: 'var(--chart-grid)' }}
+            contentStyle={{ borderRadius: 10, border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text)', boxShadow: 'var(--shadow-popover)', fontSize: 13 }}
+            formatter={(value) => [Number(value).toFixed(data.decimalPrecision), 'CGPA']}
+            labelFormatter={(value) => `Semester ${value}`}
+          />
+          <Line type="monotone" dataKey="cgpa" stroke="var(--primary)" strokeWidth={2.5} dot={{ r: 4, fill: 'var(--primary)', stroke: 'var(--surface)', strokeWidth: 2 }} activeDot={{ r: 6 }} />
         </LineChart>
       </ResponsiveContainer>
     </div>
@@ -92,6 +98,7 @@ export function AcademicPerformanceWidget() {
 }
 
 export default function AcademicPerformancePage() {
+  const { confirm } = useConfirmDialog()
   const [data, setData] = useState<AcademicPerformanceData | null>(null)
   const [drafts, setDrafts] = useState<Record<number, ResultDraft>>({})
   const [expectedSGPA, setExpectedSGPA] = useState('')
@@ -170,7 +177,12 @@ export default function AcademicPerformancePage() {
 
   const deleteResult = async (semesterNumber: number) => {
     const result = resultBySemester.get(semesterNumber)
-    if (!result || !window.confirm(`Delete the result for semester ${semesterNumber}?`)) return
+    if (!result || !(await confirm({
+      title: 'Delete this semester result?',
+      description: `The result for semester ${semesterNumber} will be permanently removed.`,
+      confirmLabel: 'Delete result',
+      variant: 'danger',
+    }))) return
     await perform(() => deleteSemesterResult(result.id), `Semester ${semesterNumber} result deleted.`)
   }
 

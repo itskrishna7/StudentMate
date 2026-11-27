@@ -452,8 +452,8 @@ test.describe('Synthetic real-world semester', () => {
       }
     }))
     const before = await readCounts()
-    page.once('dialog', (dialog) => void dialog.accept())
     await page.getByRole('button', { name: /Confirm import \(1\)/ }).click()
+    await page.getByRole('dialog', { name: 'Import academic data?' }).getByRole('button', { name: 'Import entries' }).click()
     await expect(page.getByRole('status')).toContainText('1 entry imported')
     const after = await readCounts()
     expect(after.timetableRules).toBe(before.timetableRules + 1)
@@ -664,8 +664,12 @@ test.describe('Synthetic real-world semester', () => {
     await expect(page.locator('.session-card').filter({ hasText: 'Applied Physics' }).first()).toBeVisible()
 
     await page.getByLabel('Date').fill('2026-11-26')
-    page.once('dialog', (dialog) => dialog.accept())
     await page.getByRole('button', { name: 'Mark whole day holiday' }).click()
+    const holidayConfirmation = page.getByRole('dialog', { name: 'Mark this day as a holiday?' })
+    await holidayConfirmation.getByRole('button', { name: 'Cancel' }).click()
+    await expect(holidayConfirmation).not.toBeVisible()
+    await page.getByRole('button', { name: 'Mark whole day holiday' }).click()
+    await page.getByRole('dialog', { name: 'Mark this day as a holiday?' }).getByRole('button', { name: 'Mark as holiday' }).click()
     await expect(page.locator('.success-banner')).toContainText('Marked 1 class as a holiday for 2026-11-26')
     await expect(page.locator('.session-card').filter({ hasText: 'Database Laboratory' }).first()).toContainText('holiday')
 
